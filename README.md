@@ -1,62 +1,162 @@
-# RDM - Rapid Download Manager
-<img width="1402" height="1122" alt="icon" src="https://github.com/user-attachments/assets/448ef0d1-dab2-42fa-a6a0-b9f5273343f7" />
+# ⚡ RDM - Rapid Download Manager
 
+<p align="center">
+  <img width="180" alt="RDM Logo" src="https://github.com/user-attachments/assets/448ef0d1-dab2-42fa-a6a0-b9f5273343f7" />
+</p>
 
-RDM is an open-source, Linux-native download manager written in Rust. The project
-uses a Rust download engine, SQLite persistence, a Tauri 2 desktop shell, a
-React/TypeScript interface, and a browser Native Messaging bridge.
+<h3 align="center">A fast, native, and open-source download manager for Linux.</h3>
 
-**RDM 1.0.0** is a Linux-native download manager with a Rust download engine,
-SQLite persistence, a Tauri 2 desktop shell, and a browser Native Messaging bridge.
+<p align="center">
+  Built with Rust. Designed for Linux. Made for speed.
+</p>
 
-## Features in this release
+<p align="center">
+  <img src="https://img.shields.io/badge/Version-1.0.0-2563EB?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Language-Rust-orange?style=for-the-badge&logo=rust" />
+  <img src="https://img.shields.io/badge/Desktop-Tauri%202-blue?style=for-the-badge&logo=tauri" />
+  <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" />
+  <img src="https://img.shields.io/badge/License-GPL--3.0-green?style=for-the-badge" />
+</p>
 
-- Native Linux desktop application (Tauri 2)
-- HTTP and HTTPS downloads
-- Resume using HTTP Range when supported, with returned byte-offset validation
-- Pause, resume, cancel
-- SQLite task persistence
-- Queue list and task status
-- Per-task speed limit
-- Automatic filename extraction from URL / Content-Disposition
-- Browser extension using Native Messaging
-- CLI mode
-- No Wine, Proton, or Electron
+---
 
-## Requirements
+## 🚀 Overview
 
-- Rust stable and Cargo
-- Node.js 20+ and npm
-- Tauri 2 Linux prerequisites: WebKitGTK 4.1, GTK3, build tools
-- SQLite is bundled through rusqlite's `bundled` feature
-- Optional: FFmpeg (future media milestone)
+**RDM (Rapid Download Manager)** is an open-source, Linux-native download manager written in Rust.
+
+Designed to provide a modern download management experience, RDM combines a high-performance Rust download engine with a lightweight desktop interface and persistent task management.
+
+Unlike solutions that rely on compatibility layers or heavyweight runtimes, RDM is built specifically for Linux.
+
+The project uses:
+
+- **Rust** for the download engine and core functionality.
+- **Tauri 2** for the native desktop application.
+- **React + TypeScript** for the user interface.
+- **SQLite** for persistent download management.
+- **Native Messaging** for browser integration.
+
+RDM aims to bring a reliable, extensible, and native download management experience to the Linux desktop.
+
+## ✨ Features
+
+### 📥 Download Management
+
+- HTTP and HTTPS download support.
+- Pause, resume, and cancel downloads.
+- HTTP Range-based download resumption when supported by the server.
+- Returned byte-offset validation during resume.
+- Persistent download tasks using SQLite.
+- Download queue and task status tracking.
+- Per-download speed limits.
+- Automatic filename detection.
+- Support for custom download destinations.
+- Partial download file management.
+
+### 🌐 Browser Integration
+
+- Native Messaging architecture.
+- Chromium and Firefox extension support.
+- Send download links directly from your browser.
+- Page referrer forwarding.
+- No unnecessary browser credential collection.
+
+### ⚙️ Performance & Architecture
+
+- Rust-powered download engine.
+- Asynchronous HTTP networking.
+- Lightweight Tauri desktop runtime.
+- SQLite-backed task persistence.
+- Native Linux integration.
+- CLI download support.
+
+### 🔒 Privacy & Security
+
+- No telemetry.
+- No automatic execution of downloaded files.
+- No TCP listener.
+- Browser communication through Native Messaging.
+- HTTP and HTTPS URL scheme validation.
+- Native host message-size validation.
+
+## 🖥️ Technology Stack
+
+| Component | Technology |
+|---|---|
+| Core Engine | Rust |
+| Desktop Framework | Tauri 2 |
+| Frontend | React + TypeScript |
+| Database | SQLite |
+| HTTP Client | Reqwest |
+| Browser Integration | Native Messaging |
+| Build System | Cargo + npm |
+
+## 📦 Requirements
+
+Before building RDM, make sure you have:
+
+- Rust stable
+- Cargo
+- Node.js 20+
+- npm
+- GTK3
+- WebKitGTK 4.1
+- Linux build tools
 
 ### Arch Linux
 
+Install the required dependencies:
+
 ```bash
 sudo pacman -Syu
-sudo pacman -S --needed base-devel curl wget file openssl \
-  gtk3 webkit2gtk-4.1 librsvg libayatana-appindicator \
-  nodejs npm rust
+
+sudo pacman -S --needed \
+  base-devel \
+  curl \
+  wget \
+  file \
+  openssl \
+  gtk3 \
+  webkit2gtk-4.1 \
+  librsvg \
+  libayatana-appindicator \
+  nodejs \
+  npm \
+  rust
 ```
 
-If `libayatana-appindicator` is unavailable in your repository setup, consult
-the current Tauri Linux prerequisites for the equivalent package.
+If `libayatana-appindicator` is unavailable in your repository configuration, check the current Tauri Linux prerequisites for the equivalent dependency.
 
-## Build and run
+## 🛠️ Installation & Build
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/ruaavell/RDM.git
+cd RDM
+```
+
+### 2. Install frontend dependencies
 
 ```bash
 npm install
+```
+
+### 3. Run in development mode
+
+```bash
 npm run tauri dev
 ```
 
-Build desktop bundle:
+### 4. Build the desktop application
 
 ```bash
 npm run tauri build
 ```
 
-Build/test Rust workspace:
+The generated application bundles will be available in the Tauri build output directory.
+
+### 5. Build and test the Rust workspace
 
 ```bash
 cargo fmt --all -- --check
@@ -64,7 +164,11 @@ cargo test --workspace
 cargo build --workspace
 ```
 
-CLI:
+## 💻 CLI Usage
+
+RDM also provides a command-line interface.
+
+Download a file directly:
 
 ```bash
 cargo run -p rdm-cli -- \
@@ -72,52 +176,145 @@ cargo run -p rdm-cli -- \
   --output "$HOME/Downloads/archive.zip"
 ```
 
-## Browser extension
+This allows RDM's download functionality to be used without opening the desktop interface.
 
-1. Build/install the desktop app or run its Native Messaging host manually.
-2. Edit `browser-extension/native-host/rdm_native_host.py` and set the absolute
-   path to the installed `rdm-native-host` executable.
-3. Register the Native Messaging manifest for the browser (examples are in
-   `browser-extension/native-host/manifests/`).
-4. Load `browser-extension/` as an unpacked extension in Chromium or Firefox.
-5. Use the extension context menu to send a link to RDM.
+## 🌍 Browser Extension
 
-The extension only sends a URL and page referrer in this MVP. It deliberately
-does not harvest all browser cookies or credentials.
+RDM includes a browser integration based on the Native Messaging API.
 
-## Data locations
+### Setup
 
-- SQLite database: `$XDG_DATA_HOME/rdm/rdm.sqlite3` (fallback `~/.local/share/rdm`)
-- Downloads: selected by the user
-- Partial files: destination filename plus `.rdm.part`
+1. Build or install the RDM desktop application.
+2. Build or configure the Native Messaging host.
+3. Open `browser-extension/native-host/rdm_native_host.py`.
+4. Configure the absolute path to the installed `rdm-native-host` executable.
+5. Register the Native Messaging manifest for your browser.
+6. Load the `browser-extension/` directory as an unpacked extension.
 
-## Security notes
+Supported browser families:
 
-- The app binds no TCP listener.
-- Browser communication uses Native Messaging over stdin/stdout.
-- The native host validates message size and URL scheme.
-- Only HTTP and HTTPS URLs are accepted.
-- No telemetry is included.
-- Downloaded files are never executed automatically.
+- Chromium-based browsers
+- Mozilla Firefox
 
-## Architecture
+Once configured, you can send links directly to RDM through the browser context menu.
+
+**Privacy note:** The current implementation forwards the download URL and page referrer. It does not collect all browser cookies or credentials.
+
+## 🏗️ Architecture
+
+RDM follows a modular architecture that separates the desktop interface, download engine, database, and browser integration.
 
 ```text
-React / Tauri UI
-      |
- Tauri commands
-      |
- RDM Core (Rust)
-      |---------------- SQLite task store
-      |---------------- Reqwest HTTP client
-      |---------------- .rdm.part files
-      |
- Native Messaging Host <--- Browser Extension
-      |
-      +---- launches/communicates with the desktop app through
-            a local handoff file in the user's XDG runtime/data directory
+                  ┌──────────────────────┐
+                  │    React / TypeScript│
+                  │       Frontend       │
+                  └──────────┬───────────┘
+                             │
+                  ┌──────────▼───────────┐
+                  │       Tauri 2        │
+                  │    Desktop Shell     │
+                  └──────────┬───────────┘
+                             │
+                  ┌──────────▼───────────┐
+                  │      RDM Core        │
+                  │        Rust          │
+                  └──────────┬───────────┘
+                             │
+             ┌───────────────┼────────────────┐
+             │               │                │
+      ┌──────▼─────┐  ┌──────▼──────┐  ┌──────▼──────┐
+      │   SQLite   │  │   Reqwest   │  │ File System │
+      │ Task Store │  │ HTTP Engine │  │ .rdm.part   │
+      └────────────┘  └─────────────┘  └─────────────┘
+
+                  Browser Integration
+                             │
+                  ┌──────────▼───────────┐
+                  │  Browser Extension   │
+                  └──────────┬───────────┘
+                             │
+                  ┌──────────▼───────────┐
+                  │  Native Messaging    │
+                  │        Host          │
+                  └──────────┬───────────┘
+                             │
+                  ┌──────────▼───────────┐
+                  │    Local Handoff     │
+                  └──────────────────────┘
 ```
 
-## License
+## 📁 Data Storage
 
-GPL-3.0-or-later. See `LICENSE`.
+RDM stores its application data in standard Linux user directories.
+
+| Data | Location |
+|---|---|
+| SQLite Database | `$XDG_DATA_HOME/rdm/rdm.sqlite3` |
+| Fallback Database | `~/.local/share/rdm/rdm.sqlite3` |
+| Downloads | User-selected directory |
+| Temporary Files | `filename.rdm.part` |
+
+RDM follows the XDG directory conventions for Linux desktop applications.
+
+## 🔐 Security
+
+Security and user privacy are important parts of RDM's design.
+
+Current security characteristics:
+
+- No TCP listener.
+- Native Messaging communication through stdin/stdout.
+- Native host message-size validation.
+- HTTP and HTTPS schemes only.
+- No automatic execution of downloaded files.
+- No telemetry or background data collection.
+- Browser credentials are not harvested.
+
+## 🗺️ Roadmap
+
+RDM is designed to grow into a complete Linux download management platform.
+
+Potential development directions:
+
+- [ ] Multi-connection downloads.
+- [ ] Advanced download scheduling.
+- [ ] Download categories and filters.
+- [ ] Global download speed limits.
+- [ ] Browser integration improvements.
+- [ ] Download history and statistics.
+- [ ] Checksum verification.
+- [ ] Torrent support.
+- [ ] Media download integration.
+- [ ] FFmpeg-based media processing.
+- [ ] Desktop notifications.
+- [ ] More Linux package formats.
+
+*Roadmap items are planned development directions, not features currently included in version 1.0.0.*
+
+## 🤝 Contributing
+
+Contributions, bug reports, feature requests, and suggestions are welcome!
+
+If you want to contribute:
+
+1. Fork the repository.
+2. Create a feature branch.
+3. Make your changes.
+4. Run the Rust tests.
+5. Submit a pull request.
+
+Please keep contributions focused, documented, and compatible with the Linux-first philosophy of RDM.
+
+## 📜 License
+
+RDM is licensed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)**.
+
+See the [LICENSE](LICENSE) file for details.
+
+---
+
+<p align="center">
+  <b>RDM - Rapid Download Manager</b>
+  <br />
+  Built with ❤️ and Rust for Linux.
+</p>
