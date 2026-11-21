@@ -585,6 +585,59 @@ impl DownloadManager {
         Ok(())
     }
 
+    async fn ensure_ytdlp(&self) -> Result<PathBuf> {
+        // Prefer a binary already available on PATH.
+        if let Ok(output) = tokio::process::Command::new("yt-dlp")
+            .arg("--version")
+            .output()
+            .await
+        {
+            if output.status.success() {
+                return Ok(PathBuf::from("yt-dlp"));
+            }
+        }
+
+        // Common user-local install location.
+        if let Some(home) = dirs::home_dir() {
+            let local = home.join(".local").join("bin").join("yt-dlp");
+            if local.exists() {
+                return Ok(local);
+            }
+        }
+
+        // App-managed install location.
+        let base = dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("rdm")
+            .join("bin");
+        let target = base.join("yt-dlp");
+        if target.exists() {
+            return Ok(target);
+        }
+
+        tokio::fs::create_dir_all(&base).await?;
+        let url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .context("Could not download yt-dlp")?;
+        if !resp.status().is_success() {
+            bail!("Could not download yt-dlp: HTTP {}", resp.status());
+        }
+        let bytes = resp.bytes().await.context("Could not read yt-dlp download")?;
+        tokio::fs::write(&target, &bytes).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = tokio::fs::metadata(&target).await?.permissions();
+            perms.set_mode(0o755);
+            tokio::fs::set_permissions(&target, perms).await?;
+        }
+        Ok(target)
+    }
+
     async fn run_ytdlp(&self, id: &str, mut control: watch::Receiver<Control>) -> Result<()> {
         use tokio::io::AsyncBufReadExt;
         let task = self.get(id).await?;
@@ -598,16 +651,8 @@ impl DownloadManager {
         };
         tokio::fs::create_dir_all(&out_dir).await?;
 
-        // Ensure yt-dlp is available.
-        let available = tokio::process::Command::new("yt-dlp")
-            .arg("--version")
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !available {
-            return Err(anyhow!("yt-dlp is not installed"));
-        }
+        // Resolve (and auto-install if necessary) the yt-dlp binary.
+        let ytdlp = self.ensure_ytdlp().await?;
 
         self.update(id, |t| {
             t.status = DownloadStatus::Downloading;
@@ -615,7 +660,7 @@ impl DownloadManager {
         })
         .await?;
 
-        let mut child = tokio::process::Command::new("yt-dlp")
+        let mut child = tokio::process::Command::new(&ytdlp)
             .arg("--no-playlist")
             .arg("-f")
             .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best")
