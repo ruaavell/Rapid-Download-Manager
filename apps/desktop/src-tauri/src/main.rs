@@ -314,11 +314,16 @@ fn show_progress_window(app: &tauri::AppHandle) {
 
 fn main() {
     use fs2::FileExt;
-    let lock_path = dirs::data_local_dir()
+    use std::io::{Read, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    let data_dir = dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("rdm")
-        .join("rdm.lock");
-    let _ = std::fs::create_dir_all(lock_path.parent().unwrap());
+        .join("rdm");
+    let _ = std::fs::create_dir_all(&data_dir);
+    let lock_path = data_dir.join("rdm.lock");
+    let socket_path = data_dir.join("rdm.sock");
+
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -326,12 +331,19 @@ fn main() {
         .ok();
     if let Some(file) = &lock_file {
         if file.try_lock_exclusive().is_err() {
-            // Another instance is already running.
+            // Another instance is already running: ask it to show its window.
+            if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+                let _ = stream.write_all(b"show");
+            }
             std::process::exit(0);
         }
     }
     // Keep lock_file alive for process lifetime.
     let _lock_file = lock_file;
+
+    // Remove stale socket from a previous run.
+    let _ = std::fs::remove_file(&socket_path);
+    let socket_path_for_thread = socket_path.clone();
     let store = TaskStore::open_default().expect("Could not initialize RDM database");
     let manager = Arc::new(DownloadManager::new(store).expect("Could not initialize download engine"));
 
@@ -340,7 +352,29 @@ fn main() {
             manager,
             pending: Arc::new(Mutex::new(Vec::new())),
         })
-        .setup(|app| {
+        .setup(move |app| {
+            // Single-instance socket: show window when another launch signals us.
+            let handle = app.handle().clone();
+            let sock = socket_path_for_thread.clone();
+            std::thread::spawn(move || {
+                use std::io::Read;
+                if let Ok(listener) = UnixListener::bind(&sock) {
+                    for incoming in listener.incoming() {
+                        if let Ok(mut stream) = incoming {
+                            let mut buf = [0u8; 16];
+                            let _ = stream.read(&mut buf);
+                            let app = handle.clone();
+                            let app2 = app.clone();
+                            let _ = app.run_on_main_thread(move || {
+                                if let Some(window) = app2.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            });
+                        }
+                    }
+                }
+            });
             // System tray so the app can stay alive in the background.
             let quit_item = MenuItem::with_id(app, "quit", "Quit RDM", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&quit_item])?;

@@ -34,7 +34,7 @@ document.getElementById("check").addEventListener("click", () => {
 });
 
 document.getElementById("github").addEventListener("click", () => {
-  chrome.tabs.create({ url: "https://github.com/ruaavell/Rapid-Download-Manager" });
+  window.open("https://github.com/ruaavell/Rapid-Download-Manager", "_blank");
 });
 
 checkConnection((ok, msg) => {
