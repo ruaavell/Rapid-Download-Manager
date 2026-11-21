@@ -25,7 +25,7 @@ function openErrorPage() {
 function sendToRdm(url, referrer) {
   isEnabled((enabled) => {
     if (!enabled) return;
-    if (!url || !/^https?:\\/\\//i.test(url)) return;
+    if (!url || !(url.startsWith("http://") || url.startsWith("https://"))) return;
     checkConnection((ok, msg) => {
       if (!ok) {
         setIcon(false);
@@ -88,7 +88,7 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
   isEnabled((enabled) => {
     if (!enabled) return;
     const url = downloadItem.finalUrl || downloadItem.url;
-    if (!url || !/^https?:\\/\\//i.test(url)) return;
+    if (!url || !(url.startsWith("http://") || url.startsWith("https://"))) return;
     checkConnection((ok) => {
       if (!ok) { setIcon(false); openErrorPage(); return; }
       try { chrome.downloads.cancel(downloadItem.id); } catch (e) {}

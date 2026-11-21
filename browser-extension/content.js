@@ -3,7 +3,7 @@ document.addEventListener("click", event => {
   if (!(event.ctrlKey || event.metaKey)) return;
   const anchor = event.target && event.target.closest ? event.target.closest("a") : null;
   if (!anchor || !anchor.href) return;
-  if (!/^https?:\\/\\//i.test(anchor.href)) return;
+  if (!(anchor.href.startsWith("http://") || anchor.href.startsWith("https://"))) return;
   event.preventDefault();
   event.stopPropagation();
   try {
