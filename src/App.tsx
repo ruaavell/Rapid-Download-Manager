@@ -47,24 +47,13 @@ export default function App() {
   const [speedLimit, setSpeedLimit] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [pending, setPending] = useState<Pending[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autostart, setAutostart] = useState(false);
   const [globalSpeed, setGlobalSpeed] = useState(localStorage.getItem("rdm-global-speed") || "");
-  const [pendingDest, setPendingDest] = useState("");
-  const [pendingName, setPendingName] = useState("");
 
   async function refresh() {
     try {
-      try { await invoke("import_browser_inbox"); } catch (e) { await invoke("importBrowserInbox"); }
       setTasks(await invoke<Task[]>("list_downloads"));
-      const p = await invoke<Pending[]>("list_pending_downloads");
-      setPending(p);
-      if (p.length && !pendingDest) {
-        const dir = await invoke<string>("default_download_dir");
-        setPendingDest(dir);
-      }
-      if (p.length && !pendingName) setPendingName(p[0].filename);
     } catch (e) { setError(String(e)); }
   }
   useEffect(() => {
@@ -83,31 +72,6 @@ export default function App() {
     return true;
   }), [tasks, filter]);
 
-  async function confirmPending() {
-    if (!pending.length) return;
-    setBusy(true); setError("");
-    try {
-      const effectiveSpeed2 = globalSpeed;
-      await invoke("confirm_pending_download", { payload: {
-        id: pending[0].id, destination: folderFor(pending[0].url, pendingName || pending[0].filename, pendingDest),
-        filename: pendingName || null,
-        speedLimit: effectiveSpeed2 ? Number(effectiveSpeed2) * 1024 : null
-      }});
-      setPending(prev => prev.slice(1));
-      setPendingName("");
-      await refresh();
-    } catch (e) { setError(String(e)); }
-    finally { setBusy(false); }
-  }
-  async function dismissPending() {
-    if (!pending.length) return;
-    try {
-      await invoke("dismiss_pending_download", { id: pending[0].id });
-      setPending(prev => prev.slice(1));
-      setPendingName("");
-      await refresh();
-    } catch (e) { setError(String(e)); }
-  }
 
   function folderFor(url: string, name: string, base: string) {
     const cat = categoryOf(name || url.split("/").pop() || "");
@@ -189,7 +153,7 @@ export default function App() {
             </div>
           </div>)}
         </div>
-        <footer className="statusbar"><span><span className="live-dot"/> Engine ready</span><span>{tasks.length} tasks</span><span>{tasks.filter(t=>t.status==="downloading").length} active</span><span>RDM 0.2.0</span></footer>
+        <footer className="statusbar"><span><span className="live-dot"/> Engine ready</span><span>{tasks.length} tasks</span><span>{tasks.filter(t=>t.status==="downloading").length} active</span><span>RDM 1.0.0</span></footer>
       </main>
     </div>
 
@@ -217,22 +181,6 @@ export default function App() {
       </div>
     </div>}
 
-    {pending.length > 0 && <div className="modal-backdrop">
-      <div className="modal">
-        <div className="modal-title"><div><h2>Download detected</h2><p>Confirm where to save this file</p></div></div>
-        <div className="file-meta" style={{marginBottom:12}}>
-          <b>{pending[0].filename}</b>
-          <small title={pending[0].url}>{pending[0].url}</small>
-          <small>{pending[0].size ? fmtBytes(pending[0].size) : "Size unknown"}{pending[0].content_type ? ` • ${pending[0].content_type}` : ""}</small>
-        </div>
-        <label>Save to<input required value={pendingDest} onChange={e=>setPendingDest(e.target.value)}/></label>
-        <label>Filename<input required value={pendingName} onChange={e=>setPendingName(e.target.value)}/></label>
-        <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={dismissPending} disabled={busy}>Cancel</button>
-          <button type="button" className="add-button" onClick={confirmPending} disabled={busy}>{busy?"Starting…":"Download"}</button>
-        </div>
-      </div>
-    </div>}
   </div>;
 }
 
