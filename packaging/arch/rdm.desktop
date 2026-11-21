@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=RDM
+Comment=Rapid Download Manager
+Exec=/usr/bin/rdm
+Icon=rdm
+Terminal=false
+Categories=Network;FileTransfer;
+StartupNotify=true

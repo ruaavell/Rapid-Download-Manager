@@ -20,4 +20,6 @@ package() {
   cd "$srcdir/rdm"
   install -Dm755 "target/release/rdm-desktop" "$pkgdir/usr/bin/rdm"
   install -Dm644 "README.md" "$pkgdir/usr/share/doc/rdm/README.md"
+  install -Dm644 "apps/desktop/src-tauri/icons/icon.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/rdm.png"
+  install -Dm644 "$srcdir/rdm/packaging/arch/rdm.desktop" "$pkgdir/usr/share/applications/rdm.desktop"
 }
