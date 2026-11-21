@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "RDM Browser Integration",
   "version": "1.0.0",
-  "description": "Send download links to RDM.","permissions": ["contextMenus", "nativeMessaging", "notifications", "downloads"],
+  "description": "Send download links to RDM.","permissions": ["contextMenus", "nativeMessaging", "notifications", "downloads", "storage"],
   "host_permissions": [
     "http://*/*",
     "https://*/*"
