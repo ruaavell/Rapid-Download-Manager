@@ -26,6 +26,17 @@ const fmtBytes = (n: number) => {
 };
 const pct = (t: Task) => t.total && t.total > 0 ? Math.min(100, t.downloaded / t.total * 100) : 0;
 
+function categoryOf(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  if (["zip","rar","7z","tar","gz","bz2","xz","tgz"].includes(ext)) return "compressed";
+  if (["mp3","flac","wav","aac","ogg","m4a"].includes(ext)) return "music";
+  if (["mp4","mkv","avi","mov","wmv","webm","flv"].includes(ext)) return "videos";
+  if (["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","rtf","odt"].includes(ext)) return "documents";
+  if (["exe","msi","deb","rpm","appimage","dmg","pkg","sh"].includes(ext)) return "programs";
+  return "other";
+}
+const CATEGORY_LABEL: Record<string,string> = { compressed:"Compressed", documents:"Documents", music:"Music", videos:"Videos", programs:"Programs" };
+
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [filter, setFilter] = useState("all");
@@ -37,6 +48,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [autostart, setAutostart] = useState(false);
   const [pendingDest, setPendingDest] = useState("");
   const [pendingName, setPendingName] = useState("");
 
@@ -65,6 +78,7 @@ export default function App() {
     if (filter === "active") return t.status === "downloading" || t.status === "queued";
     if (filter === "completed") return t.status === "completed";
     if (filter === "paused") return t.status === "paused";
+    if (CATEGORY_LABEL[filter]) return categoryOf(t.filename) === filter;
     return true;
   }), [tasks, filter]);
 
@@ -73,7 +87,7 @@ export default function App() {
     setBusy(true); setError("");
     try {
       await invoke("confirm_pending_download", { payload: {
-        id: pending[0].id, destination: pendingDest,
+        id: pending[0].id, destination: folderFor(pending[0].url, pendingName || pending[0].filename, pendingDest),
         filename: pendingName || null
       }});
       setPending(prev => prev.slice(1));
@@ -92,12 +106,19 @@ export default function App() {
     } catch (e) { setError(String(e)); }
   }
 
+  function folderFor(url: string, name: string, base: string) {
+    const cat = categoryOf(name || url.split("/").pop() || "");
+    const label = CATEGORY_LABEL[cat];
+    if (!label) return base;
+    return base.replace(/\/+$/, "") + "/" + label;
+  }
+
   async function addDownload(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true); setError("");
     try {
       await invoke("add_download", { payload: {
-        url, destination, filename: filename || null,
+        url, destination: folderFor(url, filename, destination), filename: filename || null,
         speedLimit: speedLimit ? Number(speedLimit) * 1024 : null
       }});
       setUrl(""); setFilename(""); setSpeedLimit(""); setModal(false);
@@ -117,7 +138,7 @@ export default function App() {
       <div className="top-actions">
         <button className="toolbar primary" onClick={() => setModal(true)}><Plus size={17}/> Add URL</button>
         <button className="toolbar" onClick={refresh}><RefreshCw size={16}/> Refresh</button>
-        <button className="icon-button" title="Settings"><Settings size={19}/></button>
+        <button className="icon-button" title="Settings" onClick={()=>setSettingsOpen(true)}><Settings size={19}/></button>
       </div>
     </header>
 
@@ -138,11 +159,11 @@ export default function App() {
         <SideItem icon={<CirclePause/>} label="Paused" count={tasks.filter(t=>t.status==="paused").length} active={filter==="paused"} onClick={()=>setFilter("paused")}/>
         <SideItem icon={<CheckCircle2/>} label="Completed" count={tasks.filter(t=>t.status==="completed").length} active={filter==="completed"} onClick={()=>setFilter("completed")}/>
         <div className="side-heading categories">CATEGORIES</div>
-        <SideItem icon={<Archive/>} label="Compressed" onClick={()=>setFilter("all")}/>
-        <SideItem icon={<FileText/>} label="Documents" onClick={()=>setFilter("all")}/>
-        <SideItem icon={<Music/>} label="Music" onClick={()=>setFilter("all")}/>
-        <SideItem icon={<Video/>} label="Videos" onClick={()=>setFilter("all")}/>
-        <SideItem icon={<File/>} label="Programs" onClick={()=>setFilter("all")}/>
+        <SideItem icon={<Archive/>} label="Compressed" count={tasks.filter(t=>categoryOf(t.filename)==="compressed").length} active={filter==="compressed"} onClick={()=>setFilter("compressed")}/>
+        <SideItem icon={<FileText/>} label="Documents" count={tasks.filter(t=>categoryOf(t.filename)==="documents").length} active={filter==="documents"} onClick={()=>setFilter("documents")}/>
+        <SideItem icon={<Music/>} label="Music" count={tasks.filter(t=>categoryOf(t.filename)==="music").length} active={filter==="music"} onClick={()=>setFilter("music")}/>
+        <SideItem icon={<Video/>} label="Videos" count={tasks.filter(t=>categoryOf(t.filename)==="videos").length} active={filter==="videos"} onClick={()=>setFilter("videos")}/>
+        <SideItem icon={<File/>} label="Programs" count={tasks.filter(t=>categoryOf(t.filename)==="programs").length} active={filter==="programs"} onClick={()=>setFilter("programs")}/>
         <div className="sidebar-bottom"><Gauge size={15}/><span>Queue manager</span><b>{tasks.filter(t=>t.status==="downloading").length}</b></div>
       </aside>
 
@@ -177,6 +198,18 @@ export default function App() {
         <label>Speed limit (KB/s, optional)<input type="number" min="1" value={speedLimit} onChange={e=>setSpeedLimit(e.target.value)} placeholder="Unlimited"/></label>
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={()=>setModal(false)}>Cancel</button><button className="add-button" disabled={busy}>{busy?"Adding…":<><ArrowDownToLine size={16}/> Start download</>}</button></div>
       </form>
+    </div>}
+
+    {settingsOpen && <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setSettingsOpen(false);}}>
+      <div className="modal">
+        <div className="modal-title"><div><h2>Settings</h2><p>Application preferences</p></div><button type="button" className="icon-button" onClick={()=>setSettingsOpen(false)}><X/></button></div>
+        <label>Default download folder<input value={destination} onChange={e=>setDestination(e.target.value)}/></label>
+        <label style={{display:"flex",alignItems:"center",gap:8}}>
+          <input type="checkbox" checked={autostart} onChange={e=>{setAutostart(e.target.checked); invoke("set_autostart",{enabled:e.target.checked}).catch(err=>setError(String(err)));}}/>
+          Start RDM automatically when I log in
+        </label>
+        <div className="modal-actions"><button type="button" className="add-button" onClick={()=>setSettingsOpen(false)}>Close</button></div>
+      </div>
     </div>}
 
     {pending.length > 0 && <div className="modal-backdrop">

@@ -1,7 +1,7 @@
 use rdm_core::{DownloadManager, DownloadTask, NewDownload, TaskStore};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}, Emitter, Manager, State, WindowEvent};
 use tokio::sync::Mutex;
 
 struct PendingDownload {
@@ -44,6 +44,26 @@ struct ConfirmPayload {
 }
 
 #[tauri::command]
+async fn set_autostart(enabled: bool) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or_else(|| "HOME directory is not available".to_string())?;
+    let path = home.join(".config").join("autostart").join("rdm.desktop");
+    if enabled {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let content = format!(
+            "[Desktop Entry]\nType=Application\nName=RDM\nComment=Rapid Download Manager\nExec={}\nIcon=rdm\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+            exe.display()
+        );
+        std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    } else {
+        let _ = std::fs::remove_file(&path);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn default_download_dir() -> Result<String, String> {
     let home = dirs::home_dir().ok_or_else(|| "HOME directory is not available".to_string())?;
     let downloads = home.join("Downloads");
@@ -77,8 +97,7 @@ async fn probe_url(url: String) -> Result<(Option<u64>, Option<String>, String),
     Ok((size, content_type, filename))
 }
 
-#[tauri::command]
-async fn import_browser_inbox(state: State<'_, AppState>) -> Result<usize, String> {
+async fn import_browser_inbox_inner(state: &AppState) -> Result<usize, String> {
     let data_home = dirs::data_local_dir().ok_or_else(|| "Could not resolve data dir".to_string())?;
     let inbox = data_home.join("rdm").join("browser-inbox.jsonl");
     let content = match std::fs::read_to_string(&inbox) {
@@ -156,6 +175,11 @@ async fn import_browser_inbox(state: State<'_, AppState>) -> Result<usize, Strin
 }
 
 #[tauri::command]
+async fn import_browser_inbox(state: State<'_, AppState>) -> Result<usize, String> {
+    import_browser_inbox_inner(state.inner()).await
+}
+
+#[tauri::command]
 async fn list_pending_downloads(state: State<'_, AppState>) -> Result<Vec<PendingPayload>, String> {
     let pending = state.pending.lock().await;
     Ok(pending
@@ -181,6 +205,10 @@ async fn confirm_pending_download(
         let idx = list.iter().position(|p| p.id == payload.id).ok_or_else(|| "Unknown pending".to_string())?;
         list.remove(idx)
     };
+    let dest = std::path::PathBuf::from(&payload.destination);
+    if dest.extension().is_none() {
+        let _ = std::fs::create_dir_all(&dest);
+    }
     let task = state
         .manager
         .add(NewDownload {
@@ -213,6 +241,10 @@ async fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>,
 
 #[tauri::command]
 async fn add_download(payload: AddPayload, state: State<'_, AppState>) -> Result<DownloadTask, String> {
+    let dest = std::path::PathBuf::from(&payload.destination);
+    if dest.extension().is_none() {
+        let _ = std::fs::create_dir_all(&dest);
+    }
     let task = state
         .manager
         .add(NewDownload {
@@ -260,7 +292,64 @@ fn main() {
             manager,
             pending: Arc::new(Mutex::new(Vec::new())),
         })
+        .setup(|app| {
+            // System tray so the app can stay alive in the background.
+            let quit_item = MenuItem::with_id(app, "quit", "Quit RDM", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&quit_item])?;
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().cloned().unwrap())
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    if event.id().as_ref() == "quit" {
+                        app.exit(0);
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // Background poller: import browser inbox and surface the window
+            // when a download needs confirmation, even if the UI is closed.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    let state = handle.state::<AppState>();
+                    let _ = import_browser_inbox_inner(state.inner()).await;
+                    let has_pending = !state.pending.lock().await.is_empty();
+                    if has_pending {
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.emit("pending-downloads", ());
+                        }
+                    }
+                }
+            });
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                // Keep running in the tray instead of quitting.
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            set_autostart,
             list_downloads,
             default_download_dir,
             probe_url,

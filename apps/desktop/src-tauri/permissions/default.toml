@@ -1,6 +1,7 @@
 [default]
 description = "Default permissions for RDM desktop commands."
 permissions = [
+  "allow-set-autostart",
   "allow-default-download-dir",
   "allow-probe-url",
   "allow-import-browser-inbox",
