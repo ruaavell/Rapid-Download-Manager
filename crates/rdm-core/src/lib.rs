@@ -213,6 +213,9 @@ impl DownloadManager {
         if is_torrent_url(&task.url) {
             return self.run_torrent(id, control).await;
         }
+        if is_youtube_url(&task.url) {
+            return self.run_ytdlp(id, control).await;
+        }
         let destination = PathBuf::from(&task.destination);
         // Probe server capabilities.
         let head = self.client.head(&task.url).send().await.ok();
@@ -279,8 +282,16 @@ impl DownloadManager {
         // existing sizes
         let mut existing_sizes = vec![0u64; segments];
         for i in 0..segments {
+            let seg_len = ranges[i].2 - ranges[i].1 + 1;
             if let Ok(meta) = tokio::fs::metadata(seg_path(i)).await {
-                existing_sizes[i] = meta.len().min(ranges[i].2 - ranges[i].1 + 1);
+                let len = meta.len();
+                if len > seg_len {
+                    // Corrupt/oversized partial file: discard and restart this segment.
+                    let _ = tokio::fs::remove_file(seg_path(i)).await;
+                    existing_sizes[i] = 0;
+                } else {
+                    existing_sizes[i] = len;
+                }
             }
         }
         let downloaded_init: u64 = existing_sizes.iter().sum();
@@ -294,6 +305,7 @@ impl DownloadManager {
             Done,
             Paused,
             Cancelled,
+            Fallback,
         }
 
         let mut handles = Vec::new();
@@ -321,24 +333,18 @@ impl DownloadManager {
                     .header(reqwest::header::RANGE, format!("bytes={}-{}", resume_from, end))
                     .send()
                     .await?;
-                if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT
-                    && !resp.status().is_success()
-                {
+                if resp.status() == reqwest::StatusCode::OK {
+                    // Server did not honor the range request; fall back to single stream.
+                    return Ok(Outcome::Fallback);
+                }
+                if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                     return Err(anyhow::anyhow!("HTTP {}", resp.status()));
                 }
-                // If server ignored range and returned 200, restart segment
-                let append = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-                let mut file = if append {
-                    tokio::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&seg_file)
-                        .await?
-                } else {
-                    // restart
-                    let _ = tokio::fs::remove_file(&seg_file).await;
-                    tokio::fs::File::create(&seg_file).await?
-                };
+                let mut file = tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&seg_file)
+                    .await?;
 
                 let mut stream = resp.bytes_stream();
                 loop {
@@ -402,11 +408,13 @@ impl DownloadManager {
         // await all segments
         let mut paused = false;
         let mut cancelled = false;
+        let mut fallback = false;
         let mut first_err: Option<anyhow::Error> = None;
         for h in handles {
             match h.await {
                 Ok(Ok(Outcome::Paused)) => paused = true,
                 Ok(Ok(Outcome::Cancelled)) => cancelled = true,
+                Ok(Ok(Outcome::Fallback)) => fallback = true,
                 Ok(Err(e)) if first_err.is_none() => { first_err = Some(e); }
                 Err(e) if first_err.is_none() => { first_err = Some(e.into()); }
                 _ => {}
@@ -414,6 +422,12 @@ impl DownloadManager {
         }
         updater_handle.abort();
 
+        if fallback {
+            for i in 0..segments {
+                let _ = tokio::fs::remove_file(seg_path(i)).await;
+            }
+            return self.run_single(id, control).await;
+        }
         if cancelled {
             for i in 0..segments {
                 let _ = tokio::fs::remove_file(seg_path(i)).await;
@@ -446,6 +460,25 @@ impl DownloadManager {
         }
         out.flush().await?;
         drop(out);
+        // Verify merged file size (IDM-like final check).
+        match tokio::fs::metadata(&destination).await {
+            Ok(meta) => {
+                if meta.len() != total {
+                    let _ = tokio::fs::remove_file(&destination).await;
+                    for i in 0..segments {
+                        let _ = tokio::fs::remove_file(seg_path(i)).await;
+                    }
+                    return Err(anyhow!("Incomplete merge: expected {total} bytes, got {}", meta.len()));
+                }
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&destination).await;
+                for i in 0..segments {
+                    let _ = tokio::fs::remove_file(seg_path(i)).await;
+                }
+                return Err(e.into());
+            }
+        }
         for i in 0..segments {
             let _ = tokio::fs::remove_file(seg_path(i)).await;
         }
@@ -552,6 +585,127 @@ impl DownloadManager {
         Ok(())
     }
 
+    async fn run_ytdlp(&self, id: &str, mut control: watch::Receiver<Control>) -> Result<()> {
+        use tokio::io::AsyncBufReadExt;
+        let task = self.get(id).await?;
+        let destination = std::path::PathBuf::from(&task.destination);
+        let out_dir = if destination.is_dir() {
+            destination.clone()
+        } else if let Some(parent) = destination.parent() {
+            parent.to_path_buf()
+        } else {
+            std::path::PathBuf::from(".")
+        };
+        tokio::fs::create_dir_all(&out_dir).await?;
+
+        // Ensure yt-dlp is available.
+        let available = tokio::process::Command::new("yt-dlp")
+            .arg("--version")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !available {
+            return Err(anyhow!("yt-dlp is not installed"));
+        }
+
+        self.update(id, |t| {
+            t.status = DownloadStatus::Downloading;
+            t.error = None;
+        })
+        .await?;
+
+        let mut child = tokio::process::Command::new("yt-dlp")
+            .arg("--no-playlist")
+            .arg("-f")
+            .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best")
+            .arg("--merge-output-format")
+            .arg("mp4")
+            .arg("--newline")
+            .arg("-o")
+            .arg(out_dir.join("%(title).200s.%(ext)s"))
+            .arg(&task.url)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        if let Some(stdout) = child.stdout.take() {
+            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            loop {
+                tokio::select! {
+                    changed = control.changed() => {
+                        if changed.is_ok() {
+                            let st = *control.borrow();
+                            if st == Control::Cancel {
+                                let _ = child.kill().await;
+                                self.update(id, |t| t.status = DownloadStatus::Cancelled).await.ok();
+                                return Ok(());
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    line = lines.next_line() => {
+                        match line {
+                            Ok(Some(_line)) => {}
+                            Ok(None) => break,
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        }
+
+        let status = child.wait().await?;
+        if !status.success() {
+            let msg = if let Some(stderr) = child.stderr.take() {
+                use tokio::io::AsyncReadExt;
+                let mut buf = Vec::new();
+                let mut r = stderr;
+                let _ = r.read_to_end(&mut buf).await;
+                String::from_utf8_lossy(&buf).to_string()
+            } else {
+                "yt-dlp failed".to_string()
+            };
+            return Err(anyhow!("{}", msg.trim()));
+        }
+
+        // Find the produced file (best effort: newest file in out_dir)
+        let mut newest: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
+        if let Ok(mut entries) = tokio::fs::read_dir(&out_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Ok(meta) = entry.metadata().await {
+                    if meta.is_file() {
+                        if let Ok(modified) = meta.modified() {
+                            if newest.as_ref().map(|(_, t)| modified > *t).unwrap_or(true) {
+                                newest = Some((entry.path(), modified));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((file, _)) = newest {
+            let size = tokio::fs::metadata(&file).await.map(|m| m.len()).unwrap_or(0);
+            self.update(id, |t| {
+                t.filename = file.file_name().unwrap_or_default().to_string_lossy().to_string();
+                t.destination = file.to_string_lossy().to_string();
+                t.downloaded = size;
+                t.total = Some(size);
+                t.status = DownloadStatus::Completed;
+                t.error = None;
+            })
+            .await?;
+        } else {
+            self.update(id, |t| {
+                t.status = DownloadStatus::Completed;
+                t.error = None;
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
     async fn run_single(&self, id: &str, mut control: watch::Receiver<Control>) -> Result<()> {
         let task = self.get(id).await?;
         let destination = PathBuf::from(&task.destination);
@@ -594,11 +748,16 @@ impl DownloadManager {
         }
 
         let content_length = response.content_length();
-        let total = if append {
+        let mut total = if append {
             content_length.map(|n| n.saturating_add(existing))
         } else {
             content_length
         };
+        if total.is_none() {
+            if let Ok(head) = self.client.head(&task.url).send().await {
+                total = head.content_length();
+            }
+        }
         self.update(id, |t| {
             t.downloaded = if append { existing } else { 0 };
             t.total = total;
@@ -682,6 +841,7 @@ impl DownloadManager {
 
         if let Some(expected) = total {
             if downloaded != expected {
+                let _ = fs::remove_file(&part).await;
                 bail!("Incomplete response: expected {expected} bytes, received {downloaded}");
             }
         }
@@ -777,4 +937,9 @@ mod tests {
 
 fn is_torrent_url(url: &str) -> bool {
     url.starts_with("magnet:") || url.to_lowercase().ends_with(".torrent")
+}
+
+fn is_youtube_url(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.contains("youtube.com") || lower.contains("youtu.be")
 }
