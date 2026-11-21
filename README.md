@@ -316,5 +316,5 @@ See the [LICENSE](LICENSE) file for details.
 <p align="center">
   <b>RDM - Rapid Download Manager</b>
   <br />
-  Built with ❤️ and Rust for Linux.
+  Built with ❤️ and Rust for Linux. By Ruavell
 </p>
