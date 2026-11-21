@@ -250,6 +250,9 @@ impl DownloadManager {
         use std::sync::atomic::{AtomicU64, Ordering};
         use tokio::io::AsyncWriteExt;
 
+        if let Some(parent) = destination.parent() {
+            let _ = fs::create_dir_all(parent).await;
+        }
         let part = part_path(&destination);
         let seg_path = |i: usize| -> PathBuf {
             let mut name = part.as_os_str().to_os_string();
