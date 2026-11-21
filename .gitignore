@@ -13,3 +13,4 @@ squashfs-root/
 target/
 node_modules/
 dist/
+browser-extension.pem
