@@ -19,7 +19,19 @@
     }
   ],
   "icons": {
-    "48": "icons/rdm.svg"
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2dtMvnf5Z41abFu9f136KN4/g7ZTUAqKDPisYq7OX2n5h0sc9Sf6dC9FztW8g+gpB3mxAEFV9v5qu7Vop4Fr3rMTfMRa9dY4HKfKJoIQUcx1hyh0yMOf3t/1+AO+GVI16jvZ3jnSsL//c2y5HKKg82V73l5xcyHvLUUh5bWdTKXNkGutWX5uNy+UXDRH6mu6MSlxmefTwg2jhf6uvhaayjYpFKIBbEoEij8vy6T+WPzjRHOSaTOZd5fgeTq8+j6wxcB6qewATDvYja8rCJVNtyHdOF3NLHtbUGI3oWTMO/blprhqkYBp+Y1mlsY0vk4Y5Q62VjBJO/pQOMtkmgtJewIDAQAB"
 }
