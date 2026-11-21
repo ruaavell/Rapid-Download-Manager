@@ -1,0 +1,27 @@
+[package]
+name = "rdm-engine"
+description = "Segmented HTTP/HTTPS download engine for RDM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rdm-common = { path = "../rdm-common" }
+rdm-storage = { path = "../rdm-storage" }
+reqwest.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tracing.workspace = true
+url.workspace = true
+chrono.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

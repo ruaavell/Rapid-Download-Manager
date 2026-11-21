@@ -1,0 +1,16 @@
+[default]
+description = "Default permissions for RDM desktop commands."
+permissions = [
+  "allow-default-download-dir",
+  "allow-probe-url",
+  "allow-import-browser-inbox",
+  "allow-list-pending-downloads",
+  "allow-confirm-pending-download",
+  "allow-dismiss-pending-download",
+  "allow-list-downloads",
+  "allow-add-download",
+  "allow-pause-download",
+  "allow-resume-download",
+  "allow-cancel-download",
+  "allow-remove-download"
+]

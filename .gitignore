@@ -1,0 +1,15 @@
+/target
+/node_modules
+/dist
+/.tauri
+*.part
+*.rdm.json
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+
+squashfs-root/
+target/
+node_modules/
+dist/

@@ -1,0 +1,18 @@
+[package]
+name = "rdm-media"
+description = "Media probing and download helpers for RDM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rdm-common = { path = "../rdm-common" }
+rdm-engine = { path = "../rdm-engine" }
+reqwest.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true

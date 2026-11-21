@@ -1,0 +1,21 @@
+[package]
+name = "rdm-scheduler"
+description = "Queue, concurrency, bandwidth and time-based scheduling for RDM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rdm-common = { path = "../rdm-common" }
+rdm-storage = { path = "../rdm-storage" }
+rdm-engine = { path = "../rdm-engine" }
+rdm-ipc = { path = "../rdm-ipc" }
+tokio.workspace = true
+tokio-util.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+serde_json.workspace = true

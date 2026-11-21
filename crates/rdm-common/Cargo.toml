@@ -1,0 +1,19 @@
+[package]
+name = "rdm-common"
+description = "Shared types, paths, validation and formatting for RDM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+url.workspace = true
+rusqlite.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

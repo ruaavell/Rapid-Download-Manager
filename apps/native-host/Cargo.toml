@@ -1,0 +1,12 @@
+[package]
+name = "rdm-native-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rdm-common = { path = "../../crates/rdm-common" }
+rdm-storage = { path = "../../crates/rdm-storage" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

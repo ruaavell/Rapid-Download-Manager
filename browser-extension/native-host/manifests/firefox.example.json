@@ -1,0 +1,7 @@
+{
+  "name": "io.github.ruaavell.rdm",
+  "description": "RDM Native Messaging Host",
+  "path": "/ABSOLUTE/PATH/TO/rdm_native_host.py",
+  "type": "stdio",
+  "allowed_extensions": ["rdm-browser@example.org"]
+}

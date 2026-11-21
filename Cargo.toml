@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rdm-common",
+    "crates/rdm-storage",
+    "crates/rdm-engine",
+    "crates/rdm-ipc",
+    "crates/rdm-scheduler",
+    "crates/rdm-browser",
+    "crates/rdm-media",
+    "apps/daemon",
+    "apps/rdm-cli",
+    "apps/native-host",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+authors = ["RDM Contributors"]
+repository = "https://github.com/ruaavell/rdm"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "fs", "io-util", "io-std", "macros", "rt-multi-thread", "sync", "time", "net", "signal", "process",
+] }
+tokio-util = { version = "0.7", features = ["rt"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls", "stream", "json",
+] }
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+libc = "0.2"
+rand = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+quick-xml = "0.39"
+async-trait = "0.1"
+base64 = "0.22"
+percent-encoding = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,0 +1,13 @@
+[package]
+name = "rdm-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+rdm-common = { path = "../../crates/rdm-common" }
+rdm-engine = { path = "../../crates/rdm-engine" }
+rdm-storage = { path = "../../crates/rdm-storage" }
+tokio.workspace = true

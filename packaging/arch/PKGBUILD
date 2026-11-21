@@ -1,0 +1,23 @@
+pkgname=rdm
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Rust-powered native Linux download manager"
+arch=('x86_64' 'aarch64')
+url="https://github.com/ruaavell/rdm"
+license=('GPL3')
+depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'gcc-libs' 'openssl')
+makedepends=('rust' 'cargo' 'nodejs' 'npm' 'base-devel')
+source=("rdm-${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/rdm"
+  npm install
+  cargo build --release -p rdm-desktop
+}
+
+package() {
+  cd "$srcdir/rdm"
+  install -Dm755 "target/release/rdm-desktop" "$pkgdir/usr/bin/rdm"
+  install -Dm644 "README.md" "$pkgdir/usr/share/doc/rdm/README.md"
+}
