@@ -17,3 +17,4 @@ reqwest.workspace = true
 uuid.workspace = true
 url.workspace = true
 dirs.workspace = true
+fs2 = "0.4"

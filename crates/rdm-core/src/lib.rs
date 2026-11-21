@@ -28,6 +28,7 @@ pub enum DownloadStatus {
     Completed,
     Failed,
     Cancelled,
+    Merging,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +210,9 @@ impl DownloadManager {
 
     async fn run_download(&self, id: &str, control: watch::Receiver<Control>) -> Result<()> {
         let task = self.get(id).await?;
+        if is_torrent_url(&task.url) {
+            return self.run_torrent(id, control).await;
+        }
         let destination = PathBuf::from(&task.destination);
         // Probe server capabilities.
         let head = self.client.head(&task.url).send().await.ok();
@@ -433,6 +437,7 @@ impl DownloadManager {
             return Err(e);
         }
 
+        self.update(id, |t| t.status = DownloadStatus::Merging).await.ok();
         // merge segments into destination
         let mut out = tokio::fs::File::create(&destination).await?;
         for i in 0..segments {
@@ -448,6 +453,98 @@ impl DownloadManager {
         self.update(id, |t| {
             t.downloaded = total;
             t.total = Some(total);
+            t.status = DownloadStatus::Completed;
+            t.error = None;
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn run_torrent(&self, id: &str, mut control: watch::Receiver<Control>) -> Result<()> {
+        use librqbit::{AddTorrent, Session};
+        let task = self.get(id).await?;
+        let destination = PathBuf::from(&task.destination);
+        let out_dir = if destination.is_dir() {
+            destination.clone()
+        } else if let Some(parent) = destination.parent() {
+            parent.to_path_buf()
+        } else {
+            PathBuf::from(".")
+        };
+        fs::create_dir_all(&out_dir).await?;
+
+        let session = Session::new(out_dir.clone())
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+        let add = AddTorrent::from_url(&task.url);
+        let resp = session
+            .add_torrent(add, None)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+        let handle = resp.into_handle().ok_or_else(|| anyhow!("could not get torrent handle"))?;
+
+        // Wait for metadata then download.
+        let mut paused = false;
+        loop {
+            // control handling
+            let ctrl_changed = tokio::select! {
+                r = control.changed() => r.is_ok(),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(800)) => false,
+            };
+            if ctrl_changed {
+                let current = *control.borrow();
+                match current {
+                    Control::Pause => {
+                        if !paused {
+                            let _ = session.pause(&handle).await;
+                            paused = true;
+                            self.update(id, |t| t.status = DownloadStatus::Paused).await.ok();
+                        }
+                    }
+                    Control::Cancel => {
+                        self.update(id, |t| t.status = DownloadStatus::Cancelled).await.ok();
+                        return Ok(());
+                    }
+                    Control::Run => {
+                        if paused {
+                            let _ = session.unpause(&handle).await;
+                            paused = false;
+                            self.update(id, |t| t.status = DownloadStatus::Downloading).await.ok();
+                        }
+                    }
+                }
+            }
+            if paused {
+                continue;
+            }
+            let stats = handle.stats();
+            let downloaded = stats.progress_bytes;
+            let total = if stats.total_bytes > 0 {
+                Some(stats.total_bytes)
+            } else {
+                None
+            };
+            let finished = stats.finished;
+            self.update(id, |t| {
+                t.downloaded = downloaded;
+                if let Some(tot) = total {
+                    t.total = Some(tot);
+                }
+                t.status = DownloadStatus::Downloading;
+            })
+            .await
+            .ok();
+            if finished {
+                break;
+            }
+        }
+
+        let stats = handle.stats();
+        self.update(id, |t| {
+            t.downloaded = stats.progress_bytes;
+            if stats.total_bytes > 0 {
+                t.total = Some(stats.total_bytes);
+            }
             t.status = DownloadStatus::Completed;
             t.error = None;
         })
@@ -676,4 +773,8 @@ mod tests {
         );
         assert_eq!(filename_from_url("https://example.com/"), "download.bin");
     }
+}
+
+fn is_torrent_url(url: &str) -> bool {
+    url.starts_with("magnet:") || url.to_lowercase().ends_with(".torrent")
 }

@@ -2,6 +2,7 @@ fn main() {
     tauri_build::try_build(
         tauri_build::Attributes::default().app_manifest(
             tauri_build::AppManifest::new().commands(&[
+                "open_folder",
                 "set_autostart",
                 "default_download_dir",
                 "probe_url",

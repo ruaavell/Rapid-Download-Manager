@@ -50,6 +50,7 @@ export default function App() {
   const [pending, setPending] = useState<Pending[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autostart, setAutostart] = useState(false);
+  const [globalSpeed, setGlobalSpeed] = useState(localStorage.getItem("rdm-global-speed") || "");
   const [pendingDest, setPendingDest] = useState("");
   const [pendingName, setPendingName] = useState("");
 
@@ -86,9 +87,11 @@ export default function App() {
     if (!pending.length) return;
     setBusy(true); setError("");
     try {
+      const effectiveSpeed2 = globalSpeed;
       await invoke("confirm_pending_download", { payload: {
         id: pending[0].id, destination: folderFor(pending[0].url, pendingName || pending[0].filename, pendingDest),
-        filename: pendingName || null
+        filename: pendingName || null,
+        speedLimit: effectiveSpeed2 ? Number(effectiveSpeed2) * 1024 : null
       }});
       setPending(prev => prev.slice(1));
       setPendingName("");
@@ -117,9 +120,10 @@ export default function App() {
     e.preventDefault();
     setBusy(true); setError("");
     try {
+      const effectiveSpeed = speedLimit || globalSpeed;
       await invoke("add_download", { payload: {
         url, destination: folderFor(url, filename, destination), filename: filename || null,
-        speedLimit: speedLimit ? Number(speedLimit) * 1024 : null
+        speedLimit: effectiveSpeed ? Number(effectiveSpeed) * 1024 : null
       }});
       setUrl(""); setFilename(""); setSpeedLimit(""); setModal(false);
       await refresh();
@@ -204,6 +208,7 @@ export default function App() {
       <div className="modal">
         <div className="modal-title"><div><h2>Settings</h2><p>Application preferences</p></div><button type="button" className="icon-button" onClick={()=>setSettingsOpen(false)}><X/></button></div>
         <label>Default download folder<input value={destination} onChange={e=>setDestination(e.target.value)}/></label>
+        <label>Global speed limit (KB/s)<input value={globalSpeed} onChange={e=>{setGlobalSpeed(e.target.value); localStorage.setItem("rdm-global-speed", e.target.value);}}/></label>
         <label style={{display:"flex",alignItems:"center",gap:8}}>
           <input type="checkbox" checked={autostart} onChange={e=>{setAutostart(e.target.checked); invoke("set_autostart",{enabled:e.target.checked}).catch(err=>setError(String(err)));}}/>
           Start RDM automatically when I log in

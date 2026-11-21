@@ -15,3 +15,4 @@ uuid.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "5"
 url = "2"
+librqbit = "9.1"
