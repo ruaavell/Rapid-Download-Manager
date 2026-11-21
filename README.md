@@ -1,4 +1,6 @@
 # RDM - Rapid Download Manager
+<img width="1402" height="1122" alt="icon" src="https://github.com/user-attachments/assets/448ef0d1-dab2-42fa-a6a0-b9f5273343f7" />
+
 
 RDM is an open-source, Linux-native download manager written in Rust. The project
 uses a Rust download engine, SQLite persistence, a Tauri 2 desktop shell, a
