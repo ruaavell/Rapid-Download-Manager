@@ -36,6 +36,10 @@
     "longDescription": "A Rust-powered native download manager for Linux.",
     "icon": [
       "icons/icon.png"
+    ],
+    "resources": [
+      "../../../browser-extension.crx",
+      "../../../browser-extension/native-host/rdm_native_host.py"
     ]
   }
 }

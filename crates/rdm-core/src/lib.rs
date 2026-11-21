@@ -585,7 +585,7 @@ impl DownloadManager {
         Ok(())
     }
 
-    async fn ensure_ytdlp(&self) -> Result<PathBuf> {
+    pub async fn ensure_ytdlp(&self) -> Result<PathBuf> {
         // Prefer a binary already available on PATH.
         if let Ok(output) = tokio::process::Command::new("yt-dlp")
             .arg("--version")

@@ -312,6 +312,116 @@ fn show_progress_window(app: &tauri::AppHandle) {
         .build();
 }
 
+async fn find_resource(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().and_then(|s| s.to_str()) == Some(name) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+async fn install_runtime_dependencies(
+    resource_dir: Option<std::path::PathBuf>,
+    manager: std::sync::Arc<rdm_core::DownloadManager>,
+) {
+    let _ = manager.ensure_ytdlp().await;
+
+    let Some(resource_dir) = resource_dir else { return; };
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return,
+    };
+    let data_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("rdm");
+    let _ = tokio::fs::create_dir_all(&data_dir).await;
+
+    let crx_src = find_resource(&resource_dir, "browser-extension.crx").await;
+    let host_src = find_resource(&resource_dir, "rdm_native_host.py").await;
+
+    let crx_dest = data_dir.join("browser-extension.crx");
+    if let Some(src) = crx_src {
+        let _ = tokio::fs::copy(src, &crx_dest).await;
+    }
+    let host_dest = home.join(".local").join("bin").join("rdm_native_host.py");
+    if let Some(parent) = host_dest.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if let Some(src) = host_src {
+        let _ = tokio::fs::copy(src, &host_dest).await;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = tokio::fs::metadata(&host_dest).await {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = tokio::fs::set_permissions(&host_dest, perms).await;
+            }
+        }
+    }
+
+    if !crx_dest.exists() || !host_dest.exists() {
+        return;
+    }
+
+    let ext_id = "ddnikbhjakonmonnfeannoihpnpbcojf";
+    for browser in ["chromium", "google-chrome"] {
+        let base = home.join(".config").join(browser);
+        let ext_dir = base.join("External Extensions");
+        let _ = tokio::fs::create_dir_all(&ext_dir).await;
+        let ext_json = serde_json::json!({
+            "external_crx": crx_dest.to_string_lossy(),
+            "external_version": "1.0.0"
+        });
+        let _ = tokio::fs::write(
+            ext_dir.join(format!("{}.json", ext_id)),
+            serde_json::to_string_pretty(&ext_json).unwrap_or_default(),
+        )
+        .await;
+
+        let native_dir = base.join("NativeMessagingHosts");
+        let _ = tokio::fs::create_dir_all(&native_dir).await;
+        let native_json = serde_json::json!({
+            "name": "io.github.ruaavell.rdm",
+            "description": "RDM Native Messaging Host",
+            "path": host_dest.to_string_lossy(),
+            "type": "stdio",
+            "allowed_origins": [format!("chrome-extension://{}/", ext_id)]
+        });
+        let _ = tokio::fs::write(
+            native_dir.join("io.github.ruaavell.rdm.json"),
+            serde_json::to_string_pretty(&native_json).unwrap_or_default(),
+        )
+        .await;
+    }
+
+    let ff_dir = home.join(".mozilla").join("native-messaging-hosts");
+    let _ = tokio::fs::create_dir_all(&ff_dir).await;
+    let ff_json = serde_json::json!({
+        "name": "io.github.ruaavell.rdm",
+        "description": "RDM Native Messaging Host",
+        "path": host_dest.to_string_lossy(),
+        "type": "stdio",
+        "allowed_extensions": ["rdm-browser@example.org"]
+    });
+    let _ = tokio::fs::write(
+        ff_dir.join("io.github.ruaavell.rdm.json"),
+        serde_json::to_string_pretty(&ff_json).unwrap_or_default(),
+    )
+    .await;
+}
+
 fn main() {
     use fs2::FileExt;
     use std::io::Write;
@@ -402,6 +512,14 @@ fn main() {
                     }
                 })
                 .build(app)?;
+
+            // Install runtime dependencies (yt-dlp, browser extension, native host)
+            // on startup so end users do not have to set them up manually.
+            let setup_manager = app.state::<AppState>().manager.clone();
+            let setup_resource_dir = app.path().resource_dir().ok();
+            tauri::async_runtime::spawn(async move {
+                install_runtime_dependencies(setup_resource_dir, setup_manager).await;
+            });
 
             // Background poller: import browser inbox and surface the window
             // when a download needs confirmation, even if the UI is closed.
