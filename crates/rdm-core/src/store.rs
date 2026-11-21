@@ -119,6 +119,7 @@ fn status_string(s: &DownloadStatus) -> &'static str {
         DownloadStatus::Completed => "completed",
         DownloadStatus::Failed => "failed",
         DownloadStatus::Cancelled => "cancelled",
+        DownloadStatus::Merging => "merging",
     }
 }
 
@@ -129,6 +130,7 @@ fn parse_status(s: &str) -> DownloadStatus {
         "completed" => DownloadStatus::Completed,
         "failed" => DownloadStatus::Failed,
         "cancelled" => DownloadStatus::Cancelled,
+        "merging" => DownloadStatus::Merging,
         _ => DownloadStatus::Queued,
     }
 }

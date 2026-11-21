@@ -1,7 +1,7 @@
-use rdm_core::{DownloadManager, DownloadTask, NewDownload, TaskStore};
+use rdm_core::{DownloadManager, DownloadStatus, DownloadTask, NewDownload, TaskStore};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}, Emitter, Manager, State, WindowEvent};
+use tauri::{menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::sync::Mutex;
 
 struct PendingDownload {
@@ -41,6 +41,7 @@ struct ConfirmPayload {
     id: String,
     destination: String,
     filename: Option<String>,
+    speed_limit: Option<u64>,
 }
 
 #[tauri::command]
@@ -60,6 +61,17 @@ async fn set_autostart(enabled: bool) -> Result<(), String> {
     } else {
         let _ = std::fs::remove_file(&path);
     }
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_folder(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    let folder = if p.is_dir() { p } else { p.parent().map(|x| x.to_path_buf()).unwrap_or(p) };
+    std::process::Command::new("xdg-open")
+        .arg(&folder)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -199,6 +211,7 @@ async fn list_pending_downloads(state: State<'_, AppState>) -> Result<Vec<Pendin
 async fn confirm_pending_download(
     payload: ConfirmPayload,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<DownloadTask, String> {
     let pending = {
         let mut list = state.pending.lock().await;
@@ -215,7 +228,7 @@ async fn confirm_pending_download(
             url: pending.url,
             destination: payload.destination,
             filename: payload.filename.or(Some(pending.filename)),
-            speed_limit: None,
+            speed_limit: payload.speed_limit,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -224,6 +237,7 @@ async fn confirm_pending_download(
         .start(&task.id)
         .await
         .map_err(|e| e.to_string())?;
+    show_progress_window(&app);
     Ok(task)
 }
 
@@ -240,7 +254,7 @@ async fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>,
 }
 
 #[tauri::command]
-async fn add_download(payload: AddPayload, state: State<'_, AppState>) -> Result<DownloadTask, String> {
+async fn add_download(payload: AddPayload, state: State<'_, AppState>, app: tauri::AppHandle) -> Result<DownloadTask, String> {
     let dest = std::path::PathBuf::from(&payload.destination);
     if dest.extension().is_none() {
         let _ = std::fs::create_dir_all(&dest);
@@ -256,6 +270,7 @@ async fn add_download(payload: AddPayload, state: State<'_, AppState>) -> Result
         .await
         .map_err(|e| e.to_string())?;
     state.manager.start(&task.id).await.map_err(|e| e.to_string())?;
+    show_progress_window(&app);
     Ok(task)
 }
 
@@ -283,7 +298,40 @@ async fn remove_download(id: String, delete_file: bool, state: State<'_, AppStat
         .map_err(|e| e.to_string())
 }
 
+fn show_progress_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("progress") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "progress", WebviewUrl::App("index.html?window=progress".into()))
+        .title("RDM Downloads")
+        .inner_size(440.0, 360.0)
+        .always_on_top(true)
+        .resizable(true)
+        .build();
+}
+
 fn main() {
+    use fs2::FileExt;
+    let lock_path = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("rdm")
+        .join("rdm.lock");
+    let _ = std::fs::create_dir_all(lock_path.parent().unwrap());
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+        .ok();
+    if let Some(file) = &lock_file {
+        if file.try_lock_exclusive().is_err() {
+            // Another instance is already running.
+            std::process::exit(0);
+        }
+    }
+    // Keep lock_file alive for process lifetime.
+    let _lock_file = lock_file;
     let store = TaskStore::open_default().expect("Could not initialize RDM database");
     let manager = Arc::new(DownloadManager::new(store).expect("Could not initialize download engine"));
 
@@ -330,6 +378,10 @@ fn main() {
                     let state = handle.state::<AppState>();
                     let _ = import_browser_inbox_inner(state.inner()).await;
                     let has_pending = !state.pending.lock().await.is_empty();
+                    let has_active = state.manager.list().await.iter().any(|t| matches!(t.status, DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Paused | DownloadStatus::Merging));
+                    if has_active {
+                        show_progress_window(&handle);
+                    }
                     if has_pending {
                         if let Some(window) = handle.get_webview_window("main") {
                             let _ = window.show();
@@ -349,6 +401,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            open_folder,
             set_autostart,
             list_downloads,
             default_download_dir,

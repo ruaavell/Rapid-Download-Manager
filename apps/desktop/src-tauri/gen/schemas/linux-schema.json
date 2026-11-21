@@ -177,10 +177,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Default permissions for RDM desktop commands.\n#### This default permission set includes:\n\n- `allow-default-download-dir`\n- `allow-probe-url`\n- `allow-import-browser-inbox`\n- `allow-list-pending-downloads`\n- `allow-confirm-pending-download`\n- `allow-dismiss-pending-download`\n- `allow-list-downloads`\n- `allow-add-download`\n- `allow-pause-download`\n- `allow-resume-download`\n- `allow-cancel-download`\n- `allow-remove-download`",
+          "description": "Default permissions for RDM desktop commands.\n#### This default permission set includes:\n\n- `allow-open-folder`\n- `allow-set-autostart`\n- `allow-default-download-dir`\n- `allow-probe-url`\n- `allow-import-browser-inbox`\n- `allow-list-pending-downloads`\n- `allow-confirm-pending-download`\n- `allow-dismiss-pending-download`\n- `allow-list-downloads`\n- `allow-add-download`\n- `allow-pause-download`\n- `allow-resume-download`\n- `allow-cancel-download`\n- `allow-remove-download`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for RDM desktop commands.\n#### This default permission set includes:\n\n- `allow-default-download-dir`\n- `allow-probe-url`\n- `allow-import-browser-inbox`\n- `allow-list-pending-downloads`\n- `allow-confirm-pending-download`\n- `allow-dismiss-pending-download`\n- `allow-list-downloads`\n- `allow-add-download`\n- `allow-pause-download`\n- `allow-resume-download`\n- `allow-cancel-download`\n- `allow-remove-download`"
+          "markdownDescription": "Default permissions for RDM desktop commands.\n#### This default permission set includes:\n\n- `allow-open-folder`\n- `allow-set-autostart`\n- `allow-default-download-dir`\n- `allow-probe-url`\n- `allow-import-browser-inbox`\n- `allow-list-pending-downloads`\n- `allow-confirm-pending-download`\n- `allow-dismiss-pending-download`\n- `allow-list-downloads`\n- `allow-add-download`\n- `allow-pause-download`\n- `allow-resume-download`\n- `allow-cancel-download`\n- `allow-remove-download`"
         },
         {
           "description": "Enables the add_download command without any pre-configured scope.",
@@ -231,6 +231,12 @@
           "markdownDescription": "Enables the list_pending_downloads command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-folder",
+          "markdownDescription": "Enables the open_folder command without any pre-configured scope."
+        },
+        {
           "description": "Enables the pause_download command without any pre-configured scope.",
           "type": "string",
           "const": "allow-pause-download",
@@ -253,6 +259,12 @@
           "type": "string",
           "const": "allow-resume-download",
           "markdownDescription": "Enables the resume_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_autostart command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-autostart",
+          "markdownDescription": "Enables the set_autostart command without any pre-configured scope."
         },
         {
           "description": "Denies the add_download command without any pre-configured scope.",
@@ -303,6 +315,12 @@
           "markdownDescription": "Denies the list_pending_downloads command without any pre-configured scope."
         },
         {
+          "description": "Denies the open_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-folder",
+          "markdownDescription": "Denies the open_folder command without any pre-configured scope."
+        },
+        {
           "description": "Denies the pause_download command without any pre-configured scope.",
           "type": "string",
           "const": "deny-pause-download",
@@ -325,6 +343,12 @@
           "type": "string",
           "const": "deny-resume-download",
           "markdownDescription": "Denies the resume_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_autostart command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-autostart",
+          "markdownDescription": "Denies the set_autostart command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
