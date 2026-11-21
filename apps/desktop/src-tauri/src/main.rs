@@ -1,7 +1,7 @@
 use rdm_core::{DownloadManager, DownloadStatus, DownloadTask, NewDownload, TaskStore};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::sync::Mutex;
 
 struct PendingDownload {
@@ -314,7 +314,7 @@ fn show_progress_window(app: &tauri::AppHandle) {
 
 fn main() {
     use fs2::FileExt;
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::os::unix::net::{UnixListener, UnixStream};
 
     let data_dir = dirs::data_local_dir()
@@ -327,6 +327,7 @@ fn main() {
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(false)
         .open(&lock_path)
         .ok();
     if let Some(file) = &lock_file {
@@ -359,19 +360,18 @@ fn main() {
             std::thread::spawn(move || {
                 use std::io::Read;
                 if let Ok(listener) = UnixListener::bind(&sock) {
-                    for incoming in listener.incoming() {
-                        if let Ok(mut stream) = incoming {
-                            let mut buf = [0u8; 16];
-                            let _ = stream.read(&mut buf);
-                            let app = handle.clone();
-                            let app2 = app.clone();
-                            let _ = app.run_on_main_thread(move || {
-                                if let Some(window) = app2.get_webview_window("main") {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                }
-                            });
-                        }
+                    for stream in listener.incoming().flatten() {
+                        let mut stream = stream;
+                        let mut buf = [0u8; 16];
+                        let _ = stream.read(&mut buf);
+                        let app = handle.clone();
+                        let app2 = app.clone();
+                        let _ = app.run_on_main_thread(move || {
+                            if let Some(window) = app2.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        });
                     }
                 }
             });
@@ -407,22 +407,19 @@ fn main() {
             // when a download needs confirmation, even if the UI is closed.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                let mut prev_pending = 0usize;
+                let mut prev_active = 0usize;
                 loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     let state = handle.state::<AppState>();
                     let _ = import_browser_inbox_inner(state.inner()).await;
-                    let has_pending = !state.pending.lock().await.is_empty();
-                    let has_active = state.manager.list().await.iter().any(|t| matches!(t.status, DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Paused | DownloadStatus::Merging));
-                    if has_active {
+                    let pending_count = state.pending.lock().await.len();
+                    let active_count = state.manager.list().await.iter().filter(|t| matches!(t.status, DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Paused | DownloadStatus::Merging)).count();
+                    if pending_count > prev_pending || active_count > prev_active {
                         show_progress_window(&handle);
                     }
-                    if has_pending {
-                        if let Some(window) = handle.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            let _ = window.emit("pending-downloads", ());
-                        }
-                    }
+                    prev_pending = pending_count;
+                    prev_active = active_count;
                 }
             });
             Ok(())

@@ -8,13 +8,26 @@ type Task = {
   speedLimit: number | null; error: string | null;
 };
 
+type Pending = {
+  id: string; url: string; referrer: string | null; filename: string;
+  size: number | null; content_type: string | null;
+};
+
 const pct = (t: Task) => t.total && t.total > 0 ? Math.min(100, t.downloaded / t.total * 100) : 0;
 const fmt = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`;
 
 export default function Progress() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [pending, setPending] = useState<Pending[]>([]);
   const [completedPopup, setCompletedPopup] = useState<Task | null>(null);
   const [seenCompleted, setSeenCompleted] = useState<Set<string>>(new Set());
+  const [pendingName, setPendingName] = useState("");
+  const [pendingDest, setPendingDest] = useState("");
+  const [defaultDir, setDefaultDir] = useState("");
+
+  useEffect(() => {
+    invoke<string>("default_download_dir").then(setPendingDest).catch(()=>{});
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -23,7 +36,6 @@ export default function Progress() {
         const list = await invoke<Task[]>("list_downloads");
         if (!alive) return;
         setTasks(list);
-        // detect newly completed
         for (const t of list) {
           if (t.status === "completed" && !seenCompleted.has(t.id)) {
             setSeenCompleted(prev => new Set(prev).add(t.id));
@@ -31,28 +43,56 @@ export default function Progress() {
           }
         }
       } catch {}
+      try {
+        const p = await invoke<Pending[]>("list_pending_downloads");
+        if (!alive) return;
+        setPending(p);
+        if (p.length > 0 && !pendingName) setPendingName(p[0].filename);
+      } catch {}
     };
     load();
     const id = window.setInterval(load, 500);
     return () => { alive = false; window.clearInterval(id); };
-  }, [seenCompleted]);
+  }, [seenCompleted, pendingName]);
 
   const active = tasks.filter(t => ["queued","downloading","paused","merging"].includes(t.status));
-  const recentCompleted = tasks.filter(t => t.status === "completed").slice(-3);
 
   async function pause(id: string) { await invoke("pause_download", { id }); }
   async function resume(id: string) { await invoke("resume_download", { id }); }
   async function cancel(id: string) { await invoke("cancel_download", { id }); }
   async function openFolder(path: string) { await invoke("open_folder", { path }); }
 
+  async function confirmPending() {
+    if (!pending[0]) return;
+    await invoke("confirm_pending_download", { payload: { id: pending[0].id, destination: pendingDest, filename: pendingName || null } });
+    setPending(prev => prev.slice(1));
+    setPendingName("");
+  }
+  async function dismissPending() {
+    if (!pending[0]) return;
+    await invoke("dismiss_pending_download", { id: pending[0].id });
+    setPending(prev => prev.slice(1));
+    setPendingName("");
+  }
+
   return (
     <div className="progress-window">
-      <div className="progress-header">
-        <h2>RDM Downloads</h2>
-      </div>
+      <div className="progress-header"><h2>RDM Downloads</h2></div>
       <div className="progress-list">
-        {active.length === 0 && recentCompleted.length === 0 && (
+        {active.length === 0 && pending.length === 0 && tasks.filter(t=>t.status==="completed").length===0 && (
           <div className="progress-empty">No active downloads</div>
+        )}
+        {pending[0] && (
+          <div className="progress-item">
+            <div className="progress-name">{pending[0].filename}</div>
+            <div className="progress-meta"><span>{pending[0].url}</span></div>
+            <label style={{fontSize:12}}>Filename<input value={pendingName} onChange={e=>setPendingName(e.target.value)} style={{width:"100%"}}/></label>
+            <label style={{fontSize:12}}>Destination<input value={pendingDest} onChange={e=>setPendingDest(e.target.value)} style={{width:"100%"}}/></label>
+            <div className="progress-actions">
+              <button onClick={dismissPending}>Dismiss</button>
+              <button onClick={confirmPending}>Download</button>
+            </div>
+          </div>
         )}
         {active.map(t => (
           <div key={t.id} className="progress-item">
@@ -69,7 +109,7 @@ export default function Progress() {
             </div>
           </div>
         ))}
-        {recentCompleted.map(t => (
+        {tasks.filter(t=>t.status==="completed").slice(-3).map(t => (
           <div key={t.id} className="progress-item completed">
             <div className="progress-name">{t.filename}</div>
             <div className="progress-meta"><span>Completed</span></div>
