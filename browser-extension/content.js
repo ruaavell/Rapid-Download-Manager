@@ -50,8 +50,11 @@ function attachRdmButton(video) {
     e.stopPropagation();
     const url = video.currentSrc || video.src;
     const target = (url && !url.startsWith("blob:")) ? url : location.href;
+    // A direct MP4/WebM is already a file: send it through the normal HTTP
+    // downloader instead of asking yt-dlp for a format selection.
+    const directFile = /\.(mp4|webm|mkv|mov|m4v|mp3|m4a|flac|wav|ogg)(\?|#|$)/i.test(target);
     try {
-      chrome.runtime.sendMessage({ type: "capture", url: target, referrer: location.href, media: true });
+      chrome.runtime.sendMessage({ type: "capture", url: target, referrer: location.href, media: !directFile });
     } catch (e) {}
   });
 

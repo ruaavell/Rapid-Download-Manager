@@ -52,12 +52,12 @@ const etaLabel = (t: Task) => {
 const fmtWhen = (epoch: number) => new Date(epoch * 1000).toLocaleString(undefined, {
   day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
 });
-const MEDIA_HOSTS = ["youtube.com", "youtu.be", "vimeo.com", "dailymotion.com", "twitch.tv", "tiktok.com", "instagram.com", "facebook.com", "x.com", "twitter.com"];
+const MEDIA_HOSTS = ["youtube.com", "youtu.be", "googlevideo.com", "vimeo.com", "dailymotion.com", "twitch.tv", "tiktok.com", "instagram.com", "facebook.com", "x.com", "twitter.com"];
 function isMediaCandidate(url?: string | null, page?: string | null): boolean {
   const values = [url, page].filter(Boolean).map(value => String(value).toLowerCase());
   if (values.some(value => MEDIA_HOSTS.some(host => value.includes(host)))) return true;
   const direct = String(url || "").toLowerCase();
-  return /\.(m3u8|mpd|mp4|webm|mkv|mov|m4v)(\?|#|$)/.test(direct) || direct.includes("videoplayback");
+  return /\.(m3u8|mpd)(\?|#|$)/.test(direct) || direct.includes("videoplayback");
 }
 
 function categoryOf(name: string): string {

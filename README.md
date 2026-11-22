@@ -21,6 +21,7 @@
 ---
 
 ## 🚀 Overview
+<img width="1172" height="809" alt="Ekran Görüntüsü 2026-11-22 18-10-24" src="https://github.com/user-attachments/assets/b21bd668-8a79-497d-aa11-108ac9e70c44" />
 
 **RDM (Rapid Download Manager)** is an open-source, Linux-native download manager written in Rust.
 
@@ -180,23 +181,76 @@ This allows RDM's download functionality to be used without opening the desktop 
 
 ## 🌍 Browser Extension
 
-RDM includes a browser integration based on the Native Messaging API.
+RDM includes a browser integration based on the Native Messaging API. Version 1.0.7 of the extension is shipped pre-built in the repository and installed automatically by the desktop app for Chromium-based browsers.
 
-### Setup
+### What the desktop app installs automatically
 
-1. Build or install the RDM desktop application.
-2. Build or configure the Native Messaging host.
-3. Open `browser-extension/native-host/rdm_native_host.py`.
-4. Configure the absolute path to the installed `rdm-native-host` executable.
-5. Register the Native Messaging manifest for your browser.
-6. Load the `browser-extension/` directory as an unpacked extension.
+When you run RDM at least once, it copies the pre-built extension and Native Messaging host into your user profile:
 
-Supported browser families:
+- Chrome/Chromium: `~/.local/share/rdm/browser-extension.crx` plus an external-extension manifest under `~/.config/{chromium,google-chrome}/External Extensions/`.
+- Firefox: a Native Messaging manifest at `~/.mozilla/native-messaging-hosts/io.github.ruaavell.rdm.json` (the Firefox add-on itself is installed manually, see below).
+- Native host: `~/.local/bin/rdm_native_host.py` (mode `0755`).
 
-- Chromium-based browsers
-- Mozilla Firefox
+After the first run, restart your browser and open `chrome://extensions` (Chromium) or `about:addons` (Firefox) to confirm the extension is present and enabled.
 
-Once configured, you can send links directly to RDM through the browser context menu.
+### Manual install - Chromium / Google Chrome
+
+If the automatic registration did not work, install the pre-built CRX manually:
+
+1. Open `chrome://extensions`.
+2. Enable **Developer mode** (top right).
+3. Drag and drop `browser-extension.crx` from the repository root onto the page, or use **Load unpacked** and select the `browser-extension/` directory.
+4. Confirm the **RDM Browser Integration** extension (id `ddnikbhjakonmonnfeannoihpnpbcojf`) is enabled.
+
+Alternatively, load the unpacked source for development:
+
+```bash
+git clone https://github.com/ruaavell/Rapid-Download-Manager-Linux.git
+cd Rapid-Download-Manager-Linux
+# then in chrome://extensions use "Load unpacked" -> browser-extension/
+```
+
+### Manual install - Mozilla Firefox
+
+Firefox does not load unsigned `.xpi` files permanently in release builds. Use one of these methods:
+
+1. **Temporary add-on (development / testing)**
+   - Open `about:debugging#/runtime/this-firefox`.
+   - Click **Load Temporary Add-on…** and select `browser-extension-firefox.xpi` (or any file inside `browser-extension/`, e.g. `manifest.json`).
+   - The add-on stays loaded until Firefox is closed.
+
+2. **Permanent install**
+   - The pre-built `browser-extension-firefox.xpi` is unsigned. For a permanent install, either sign it through [addons.mozilla.org](https://addons.mozilla.org/developers/) or disable signature checks in Firefox Developer Edition / Nightly (`xpinstall.signatures.required = false` in `about:config`).
+   - Then open the `.xpi` file with Firefox or drag it onto `about:addons`.
+
+The Firefox add-on id is `rdm-browser@example.org`, which matches the Native Messaging host registered by the desktop app.
+
+### Verifying the connection
+
+1. Start RDM.
+2. Click the RDM toolbar icon and press **Check connection**.
+3. The status should read **Working**. If it reads **Broken**, make sure the native host is executable (`~/.local/bin/rdm_native_host.py`) and the browser was restarted after the first RDM run.
+
+### Building the extension from source
+
+Chromium package (CRX):
+
+```bash
+chromium --pack-extension="$(pwd)/browser-extension" \
+  --pack-extension-key="$(pwd)/browser-extension.pem"
+```
+
+Firefox package (XPI):
+
+```bash
+rm -rf /tmp/rdm-ext-firefox
+mkdir -p /tmp/rdm-ext-firefox
+cp -a browser-extension/. /tmp/rdm-ext-firefox/
+cp /tmp/rdm-ext-firefox/manifest.firefox.json /tmp/rdm-ext-firefox/manifest.json
+rm -f /tmp/rdm-ext-firefox/manifest.firefox.json
+cd /tmp/rdm-ext-firefox
+zip -r -X "$PWD/../../browser-extension-firefox.xpi" .
+```
 
 **Privacy note:** The current implementation forwards the download URL and page referrer. It does not collect all browser cookies or credentials.
 
@@ -318,3 +372,4 @@ See the [LICENSE](LICENSE) file for details.
   <br />
   Built with ❤️ and Rust for Linux. By Ruavell
 </p>
+
