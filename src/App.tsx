@@ -52,7 +52,7 @@ const etaLabel = (t: Task) => {
 const fmtWhen = (epoch: number) => new Date(epoch * 1000).toLocaleString(undefined, {
   day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
 });
-const MEDIA_HOSTS = ["youtube.com", "youtu.be", "googlevideo.com", "vimeo.com", "dailymotion.com", "twitch.tv", "tiktok.com", "instagram.com", "facebook.com", "x.com", "twitter.com"];
+const MEDIA_HOSTS = ["youtube.com", "youtu.be", "googlevideo.com", "vimeo.com", "dailymotion.com", "twitch.tv", "tiktok.com", "instagram.com", "facebook.com", "x.com", "twitter.com", "reddit.com", "redd.it", "v.redd.it", "streamable.com", "bilibili.com"];
 function isMediaCandidate(url?: string | null, page?: string | null): boolean {
   const values = [url, page].filter(Boolean).map(value => String(value).toLowerCase());
   if (values.some(value => MEDIA_HOSTS.some(host => value.includes(host)))) return true;
@@ -94,6 +94,7 @@ export default function App() {
   const [speedValue, setSpeedValue] = useState("");
   const [mediaKind, setMediaKind] = useState("video");
   const [quality, setQuality] = useState("best");
+  const [forceMedia, setForceMedia] = useState(false);
   const [pendingKind, setPendingKind] = useState("video");
   const [pendingQuality, setPendingQuality] = useState("best");
   const [deleteTask, setDeleteTask] = useState<Task | null>(null);
@@ -135,7 +136,7 @@ export default function App() {
   }, [currentPending?.id]);
   useEffect(() => {
     invoke<string>("default_download_dir").then(setDestination).catch(e => setError(String(e)));
-    getVersion().then(setAppVersion).catch(() => setAppVersion("1.0.5"));
+    getVersion().then(setAppVersion).catch(() => setAppVersion("1.0.15"));
     invoke<[string,string] | null>("check_for_update").then((res) => {
       if (res) setUpdateInfo({ version: res[0], url: res[1] });
     }).catch(() => {});
@@ -193,8 +194,8 @@ export default function App() {
       await invoke("add_download", { payload: {
         url, destination: folderFor(url, filename, destination), filename: filename || null,
         speed_limit: effectiveSpeed ? Number(effectiveSpeed) * 1024 : null,
-        media_kind: addIsMedia ? mediaKind : null,
-        quality: addIsMedia ? quality : null
+        media_kind: (addIsMedia || forceMedia) ? mediaKind : null,
+        quality: (addIsMedia || forceMedia) ? quality : null
       }});
       setUrl(""); setFilename(""); setSpeedLimit(""); setModal(false);
       await refresh();
@@ -351,7 +352,7 @@ export default function App() {
           {allSegments.length > 0 && <span>{completedSegments}/{allSegments.length} parts</span>}
           <span>{tasks.length} tasks</span>
           <span>{activeTasks.length} active</span>
-          <span>RDM {appVersion || "1.0.5"}</span>
+          <span>RDM {appVersion || "1.0.15"}</span>
         </footer>
       </main>
     </div>
@@ -362,7 +363,8 @@ export default function App() {
         <label>Download URL<input autoFocus required type="url" placeholder="https://example.com/file.zip" value={url} onChange={e=>setUrl(e.target.value)}/></label>
         <label>Save to<input required value={destination} onChange={e=>setDestination(e.target.value)}/><small>Enter a folder or full destination file path.</small></label>
         <label>Filename (optional)<input value={filename} onChange={e=>setFilename(e.target.value)} placeholder="Automatically detected"/></label>
-        {addIsMedia && <div className="media-options">
+        <label style={{display:"flex",alignItems:"center",gap:8}}><input type="checkbox" checked={forceMedia} onChange={e=>setForceMedia(e.target.checked)}/> Download as media (video/audio via yt-dlp) for any site</label>
+        {(addIsMedia || forceMedia) && <div className="media-options">
           <label>Download as<select value={mediaKind} onChange={e=>setMediaKind(e.target.value)}><option value="video">Video (MP4)</option><option value="audio">Audio only (MP3)</option></select></label>
           {mediaKind === "video" && <label>Quality<select value={quality} onChange={e=>setQuality(e.target.value)}><option value="best">Best available</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option><option value="360">360p</option></select></label>}
           <small className="media-hint">Streaming pages are downloaded with yt-dlp; audio is converted to MP3 with FFmpeg.</small>

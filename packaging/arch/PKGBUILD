@@ -1,5 +1,5 @@
 pkgname=rdm
-pkgver=1.0.5
+pkgver=1.0.15
 pkgrel=3
 pkgdesc="Rust-powered native Linux download manager"
 arch=('x86_64' 'aarch64')

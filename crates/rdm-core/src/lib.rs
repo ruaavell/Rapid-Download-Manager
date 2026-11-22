@@ -526,6 +526,12 @@ impl DownloadManager {
                      Start the download again from the browser while signed in."
                 );
             }
+            // A plain HTML response for a link the user expected to be media
+            // usually means an embedded player page. Hand it to yt-dlp before
+            // saving the HTML as a (useless) file.
+            if probe.is_html() {
+                return self.run_ytdlp(id, control).await;
+            }
             self.apply_server_filename(id, probe).await?;
         }
 
@@ -1203,9 +1209,22 @@ impl DownloadManager {
         }
         sources.push(task.url.clone());
 
+        // X/Twitter: try the normal GraphQL extractor first (works for
+        // age-restricted/NSFW tweets when cookies are present), then fall back
+        // to the syndication API which is more reliable for public tweets.
+        let is_x = task.url.contains("x.com") || task.url.contains("twitter.com");
+        let mut attempts: Vec<(String, bool)> = Vec::new();
+        for source in &sources {
+            attempts.push((source.clone(), false));
+            if is_x {
+                attempts.push((source.clone(), true));
+            }
+        }
+
         let mut last_error = String::new();
         let mut produced: Option<PathBuf> = None;
-        for source in sources {
+        for (source, use_syndication) in attempts {
+            let source = source.clone();
             self.update(id, |t| {
                 t.status = DownloadStatus::Downloading;
                 t.downloaded = 0;
@@ -1218,6 +1237,54 @@ impl DownloadManager {
             // directory, otherwise an old file can be mistaken for the output.
             let work_dir = out_dir.join(format!(".rdm-media-{}", Uuid::new_v4()));
             fs::create_dir_all(&work_dir).await?;
+            // Materialise the browser cookies into a Netscape cookie jar so
+            // extractors that inspect the cookie store (notably X/Twitter's
+            // is_logged_in check) actually see the session. --add-headers
+            // alone only sends the header; it does not populate the jar.
+            let cookie_jar = if let Some(cookies) = extras.cookies.as_deref() {
+                let jar = work_dir.join("cookies.txt");
+                let mut body = String::from("# Netscape HTTP Cookie File\n");
+                // Derive candidate cookie domains from the source URL so that
+                // login-protected sites (Reddit, X, ...) keep their session,
+                // plus the X/Twitter hosts for age-restricted tweets.
+                let mut domains: Vec<String> = Vec::new();
+                if let Ok(url) = url::Url::parse(&source) {
+                    if let Some(host) = url.host_str() {
+                        domains.push(host.to_string());
+                        domains.push(format!(".{host}"));
+                        // Parent domain (e.g. reddit.com from www.reddit.com)
+                        let parts: Vec<&str> = host.split('.').collect();
+                        if parts.len() >= 2 {
+                            let parent = parts[parts.len() - 2..].join(".");
+                            domains.push(parent.clone());
+                            domains.push(format!(".{parent}"));
+                        }
+                    }
+                }
+                for d in [".x.com", "x.com", ".twitter.com", "twitter.com", "api.x.com"] {
+                    domains.push(d.to_string());
+                }
+                domains.sort();
+                domains.dedup();
+                for pair in cookies.split(';') {
+                    let pair = pair.trim();
+                    if pair.is_empty() { continue; }
+                    let (name, value) = match pair.split_once('=') {
+                        Some((n, v)) => (n.trim(), v.trim()),
+                        None => continue,
+                    };
+                    if name.is_empty() { continue; }
+                    for domain in &domains {
+                        body.push_str(&format!(
+                            "{domain}\tTRUE\t/\tTRUE\t2147483647\t{name}\t{value}\n"
+                        ));
+                    }
+                }
+                fs::write(&jar, body).await.ok();
+                Some(jar)
+            } else {
+                None
+            };
             let template = work_dir.join("%(title).200s.%(ext)s");
             let mut args: Vec<String> = vec![
                 "--no-playlist".into(),
@@ -1244,6 +1311,31 @@ impl DownloadManager {
             }
             if let Some(limit) = task.speed_limit.filter(|value| *value > 0) {
                 args.extend(["-r".into(), limit.to_string()]);
+            }
+            // Present as a normal browser to avoid trivial anti-bot blocks on
+            // sites that reject the default yt-dlp user agent.
+            args.extend([
+                "--user-agent".into(),
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36".into(),
+            ]);
+            // Syndication is only a fallback: it cannot see age-restricted media.
+            if use_syndication {
+                args.extend([
+                    "--extractor-args".into(),
+                    "twitter:api=syndication".into(),
+                ]);
+            }
+            // Forward the browser session so login-protected or referer-checked
+            // media (Reddit, X, ...) can be extracted the same way the browser
+            // would load it.
+            if let Some(referer) = extras.referrer.as_deref() {
+                args.extend(["--add-headers".into(), format!("Referer: {referer}")]);
+            }
+            if let Some(cookies) = extras.cookies.as_deref() {
+                args.extend(["--add-headers".into(), format!("Cookie: {cookies}")]);
+            }
+            if let Some(jar) = &cookie_jar {
+                args.extend(["--cookies".into(), jar.to_string_lossy().to_string()]);
             }
             args.push(source);
 

@@ -1,6 +1,55 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.14] - 2026-11-22
+
+### Fixed
+- X/Twitter age-restricted videos now use the authenticated GraphQL endpoint with browser cookies; syndication is only a fallback.
+- Reddit authentication errors are addressed by forwarding browser cookies (log in to Reddit in the browser first).
+
+## [1.0.13] - 2026-11-22
+
+### Fixed
+- Reddit Download buttons no longer recover a global media URL; each post uses its own permalink.
+
+## [1.0.12] - 2026-11-22
+
+### Fixed
+- Reddit video posts now receive a Download button even when the player is lazy-loaded.
+- X age-restricted videos try to recover the direct media URL from browser resource timing; yt-dlp uses the syndication API as fallback.
+
+## [1.0.11] - 2026-11-22
+
+### Fixed
+- Reddit video players (shreddit-player) now get a Download button.
+- Instagram button is attached to the player container and stays clickable above the overlay.
+
+## [1.0.10] - 2026-11-22
+
+### Changed
+- yt-dlp now sends a browser-like user agent.
+
+## [1.0.9] - 2026-11-22
+
+### Fixed
+- Video button now scans shadow DOM and rescans periodically for Reddit/X-style players.
+
+## [1.0.8] - 2026-11-22
+
+### Fixed
+- yt-dlp requests now use canonical headers for cookies and referer.
+- Browser video button resolves the post permalink on X/Twitter and Reddit feeds.
+
+## [1.0.7] - 2026-11-22
+
+### Added
+- All-site media fallback: pages that return HTML are handed to yt-dlp instead of being saved as a useless file.
+- Manual "Download as media" option in the Add URL dialog for sites not auto-detected.
+- Browser session cookies and referer are now forwarded to yt-dlp.
+
+### Fixed
+- Reddit, X/Twitter and other extractor-backed sites are handled by yt-dlp with the page URL.
+
+## [1.0.6] - 2026-11-22
 
 ### Fixed
 - Downloads sent from the browser are now shown in the main window for confirmation (the dialog previously only existed in a window that was never opened).
