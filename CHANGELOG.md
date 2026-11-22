@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.7] - 2026-11-22
+
+### Added
+- All-site media fallback: pages that return HTML are handed to yt-dlp instead of being saved as a useless file.
+- Manual "Download as media" option in the Add URL dialog for sites not auto-detected.
+- Browser session cookies and referer are now forwarded to yt-dlp.
+
+### Fixed
+- Reddit, X/Twitter and other extractor-backed sites are handled by yt-dlp with the page URL.
+
 ## [1.0.6] - 2026-11-22
 
 ### Fixed
