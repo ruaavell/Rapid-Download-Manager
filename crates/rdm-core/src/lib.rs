@@ -1251,6 +1251,12 @@ impl DownloadManager {
             if let Some(limit) = task.speed_limit.filter(|value| *value > 0) {
                 args.extend(["-r".into(), limit.to_string()]);
             }
+            // Present as a normal browser to avoid trivial anti-bot blocks on
+            // sites that reject the default yt-dlp user agent.
+            args.extend([
+                "--user-agent".into(),
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36".into(),
+            ]);
             // Forward the browser session so login-protected or referer-checked
             // media (Reddit, X, ...) can be extracted the same way the browser
             // would load it.
