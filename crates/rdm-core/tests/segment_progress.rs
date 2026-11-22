@@ -111,6 +111,9 @@ async fn speed_limit_can_be_applied_and_removed_while_running() {
             speed_limit: None,
             referrer: None,
             cookies: None,
+            media_kind: None,
+            quality: None,
+            media_page: None,
         })
         .await
         .unwrap();
@@ -176,6 +179,9 @@ async fn short_part_fails_verification_and_keeps_parts_for_resume() {
             speed_limit: None,
             referrer: None,
             cookies: None,
+            media_kind: None,
+            quality: None,
+            media_page: None,
         })
         .await
         .unwrap();
@@ -234,6 +240,9 @@ async fn segmented_download_reports_live_part_progress() {
             speed_limit: None,
             referrer: None,
             cookies: None,
+            media_kind: None,
+            quality: None,
+            media_page: None,
         })
         .await
         .unwrap();

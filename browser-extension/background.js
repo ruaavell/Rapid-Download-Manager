@@ -36,7 +36,7 @@ function getCookieHeader(url, cb) {
   }
 }
 
-function sendToRdm(url, referrer, filename) {
+function sendToRdm(url, referrer, filename, media) {
   isEnabled((enabled) => {
     if (!enabled) return;
     if (!url || !(url.startsWith("http://") || url.startsWith("https://"))) return;
@@ -51,6 +51,7 @@ function sendToRdm(url, referrer, filename) {
       const message = { action: "add", url, referrer: referrer || null };
       if (filename) message.filename = filename;
       if (cookies) message.cookies = cookies;
+      if (media) message.media = true;
       chrome.runtime.sendNativeMessage(HOST, message, (response) => {
         if (chrome.runtime.lastError || !response?.ok) {
           setIcon(false);
@@ -99,7 +100,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message && message.type === "capture") {
-    sendToRdm(message.url, message.referrer || sender?.tab?.url);
+    sendToRdm(message.url, message.referrer || sender?.tab?.url, null, !!message.media);
   }
 });
 

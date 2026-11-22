@@ -51,7 +51,7 @@ function attachRdmButton(video) {
     const url = video.currentSrc || video.src;
     const target = (url && !url.startsWith("blob:")) ? url : location.href;
     try {
-      chrome.runtime.sendMessage({ type: "capture", url: target, referrer: location.href });
+      chrome.runtime.sendMessage({ type: "capture", url: target, referrer: location.href, media: true });
     } catch (e) {}
   });
 

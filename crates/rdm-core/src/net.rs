@@ -195,6 +195,47 @@ pub fn is_html_content_type(content_type: &str) -> bool {
     base == "text/html" || base == "application/xhtml+xml"
 }
 
+/// Extension commonly used for a media content type.
+pub fn extension_for_content_type(content_type: &str) -> Option<&'static str> {
+    let base = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    Some(match base.as_str() {
+        "video/mp4" | "application/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/x-matroska" => "mkv",
+        "video/quicktime" => "mov",
+        "video/x-msvideo" => "avi",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/mp4" | "audio/x-m4a" => "m4a",
+        "audio/aac" => "aac",
+        "audio/ogg" | "application/ogg" => "ogg",
+        "audio/flac" | "audio/x-flac" => "flac",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "application/vnd.apple.mpegurl" | "application/x-mpegurl" => "m3u8",
+        "application/dash+xml" => "mpd",
+        _ => return None,
+    })
+}
+
+/// Add an extension derived from the content type when the name has none.
+pub fn ensure_extension(name: &str, content_type: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() {
+        return name.to_string();
+    }
+    if name.rsplit_once('.').is_some() {
+        return name.to_string();
+    }
+    match extension_for_content_type(content_type) {
+        Some(ext) => format!("{name}.{ext}"),
+        None => name.to_string(),
+    }
+}
+
 /// True when the file name has an extension that is not a web page extension,
 /// e.g. `gta3.rar`. Names without an extension return false.
 pub fn has_non_html_extension(filename: &str) -> bool {
@@ -433,6 +474,10 @@ mod tests {
         assert!(!has_non_html_extension("index.html"));
         assert!(!has_non_html_extension("download"));
         assert!(!has_non_html_extension("page.php"));
+        assert_eq!(extension_for_content_type("video/mp4; charset=binary"), Some("mp4"));
+        assert_eq!(extension_for_content_type("audio/mpeg"), Some("mp3"));
+        assert_eq!(ensure_extension("videoplayback", "video/mp4"), "videoplayback.mp4");
+        assert_eq!(ensure_extension("song.mp3", "video/mp4"), "song.mp3");
     }
 
     #[test]

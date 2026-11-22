@@ -64,3 +64,13 @@
 .progress-actions { display:flex; gap:6px; }
 .progress-actions button, .progress-open { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.12); color:inherit; border-radius:6px; padding:4px 8px; cursor:pointer; display:inline-flex; align-items:center; gap:4px; font-size:12px; }
 .progress-open { margin-top:6px; }
+.modal select{display:block;width:100%;margin-top:7px;padding:11px 12px;background:#111d2b;border:1px solid #3b506a;border-radius:6px;color:#e7edf7;outline:none;font-size:11px}
+.modal select:focus{border-color:#3c9cf0;box-shadow:0 0 0 2px #1684e322}
+.media-options{padding:11px 12px 2px;margin-bottom:15px;background:#16263a;border:1px solid #324a65;border-radius:8px}
+.media-options label{margin-bottom:11px}
+.media-hint{color:#7f96b3;font-size:9px;line-height:1.5;display:block;margin:0 0 9px}
+.task-when{color:#5f7894!important;font-size:8px!important;margin-top:2px!important}
+.status-pill.queued{background:#2c3345;color:#b9c4d8}.status-pill.queued i{background:#8998b5}
+.danger-button{display:inline-flex;align-items:center;gap:6px;padding:10px 14px;border:1px solid #7d3340;border-radius:7px;background:#9d3545;color:#fff;font-size:11px;font-weight:600}
+.danger-button:hover{background:#b43c4e}
+.delete-warning{color:#b2c2d5;font-size:11px;line-height:1.6;margin:0}

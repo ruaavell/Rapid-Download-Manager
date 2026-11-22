@@ -14,6 +14,8 @@ fn main() {
                 "add_download",
                 "pause_download",
                 "set_speed_limit",
+                "enqueue_download",
+                "dequeue_download",
                 "resume_download",
                 "cancel_download",
                 "remove_download",

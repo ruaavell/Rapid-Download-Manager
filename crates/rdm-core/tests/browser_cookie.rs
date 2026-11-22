@@ -75,6 +75,9 @@ async fn cookies_resolve_real_name_and_bytes() {
             speed_limit: None,
             referrer: Some("https://drive.google.com/".into()),
             cookies: Some("SID=abc".into()),
+            media_kind: None,
+            quality: None,
+            media_page: None,
         })
         .await
         .unwrap();

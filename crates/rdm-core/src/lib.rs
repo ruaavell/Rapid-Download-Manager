@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use reqwest::{header, header::HeaderMap, header::HeaderValue, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -45,6 +45,7 @@ pub struct DownloadTask {
     pub speed_limit: Option<u64>,
     pub error: Option<String>,
     pub created_at: i64,
+    pub completed_at: Option<i64>,
 }
 
 /// Live progress of one byte range of a segmented download.
@@ -70,6 +71,15 @@ pub struct NewDownload {
     /// `Cookie` header value from the browser. Kept in memory only.
     #[serde(default)]
     pub cookies: Option<String>,
+    /// `video` or `audio`; enables the yt-dlp media path.
+    #[serde(default)]
+    pub media_kind: Option<String>,
+    /// Preferred video height (`1080`, `720`, ...) or `best`.
+    #[serde(default)]
+    pub quality: Option<String>,
+    /// Page that contains the player, when the media URL itself is a stream.
+    #[serde(default)]
+    pub media_page: Option<String>,
 }
 
 /// Shared token bucket so every connection of a task respects one limit.
@@ -132,6 +142,9 @@ struct RequestExtras {
     referrer: Option<String>,
     cookies: Option<String>,
     filename_explicit: bool,
+    media_kind: Option<String>,
+    quality: Option<String>,
+    media_page: Option<String>,
 }
 
 /// What a one-byte range request told us about the remote file.
@@ -174,6 +187,7 @@ pub struct DownloadManager {
     controls: Arc<Mutex<HashMap<String, watch::Sender<Control>>>>,
     extras: Arc<RwLock<HashMap<String, RequestExtras>>>,
     gates: Arc<Mutex<HashMap<String, Arc<RateGate>>>>,
+    queued: Arc<RwLock<HashSet<String>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +223,7 @@ impl DownloadManager {
             controls: Arc::new(Mutex::new(HashMap::new())),
             extras: Arc::new(RwLock::new(HashMap::new())),
             gates: Arc::new(Mutex::new(HashMap::new())),
+            queued: Arc::new(RwLock::new(HashSet::new())),
         })
     }
 
@@ -284,6 +299,39 @@ impl DownloadManager {
             .clone()
     }
 
+    /// Pause a task and mark it for the serial queue. The desktop starts the
+    /// oldest queued task when another download finishes.
+    pub async fn enqueue(&self, id: &str) -> Result<()> {
+        let task = self.get(id).await?;
+        if matches!(task.status, DownloadStatus::Completed | DownloadStatus::Cancelled) {
+            bail!("A finished task cannot be queued");
+        }
+        self.queued.write().await.insert(id.to_string());
+        if matches!(
+            task.status,
+            DownloadStatus::Downloading | DownloadStatus::Merging | DownloadStatus::Verifying
+        ) {
+            if let Some(tx) = self.controls.lock().await.get(id) {
+                let _ = tx.send(Control::Pause);
+            }
+        }
+        self.update(id, |t| t.status = DownloadStatus::Queued).await?;
+        Ok(())
+    }
+
+    pub async fn dequeue(&self, id: &str) -> Result<()> {
+        self.queued.write().await.remove(id);
+        let task = self.get(id).await?;
+        if task.status == DownloadStatus::Queued {
+            self.update(id, |t| t.status = DownloadStatus::Paused).await?;
+        }
+        Ok(())
+    }
+
+    async fn is_queued(&self, id: &str) -> bool {
+        self.queued.read().await.contains(id)
+    }
+
     pub async fn add(&self, input: NewDownload) -> Result<DownloadTask> {
         validate_url(&input.url)?;
         let destination = PathBuf::from(&input.destination);
@@ -293,7 +341,36 @@ impl DownloadManager {
             .map(net::sanitize_filename)
             .filter(|s| !s.is_empty());
         let filename_explicit = explicit_name.is_some();
-        let filename = explicit_name.unwrap_or_else(|| filename_from_url(&input.url));
+        let media_kind = input
+            .media_kind
+            .as_deref()
+            .filter(|kind| matches!(*kind, "video" | "audio"))
+            .map(str::to_string);
+        let quality = input.quality.as_deref().and_then(|value| {
+            let value = value.trim();
+            if value == "best" {
+                Some("best".to_string())
+            } else {
+                value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|height| (144..=4320).contains(height))
+                    .map(|height| height.to_string())
+            }
+        });
+        let media_page = input.media_page.filter(|page| {
+            (page.starts_with("http://") || page.starts_with("https://"))
+                && !page.contains(['\r', '\n', '\0'])
+        });
+        let filename = explicit_name.unwrap_or_else(|| {
+            if media_kind.as_deref() == Some("audio") {
+                "audio.mp3".to_string()
+            } else if media_kind.is_some() || is_youtube_url(&input.url) {
+                "video.mp4".to_string()
+            } else {
+                filename_from_url(&input.url)
+            }
+        });
         let cookies = input
             .cookies
             .filter(|c| !c.is_empty() && c.len() <= 64 * 1024 && !c.contains(['\r', '\n', '\0']));
@@ -320,6 +397,7 @@ impl DownloadManager {
             speed_limit: input.speed_limit,
             error: None,
             created_at: now(),
+            completed_at: None,
         };
         self.store.upsert(&task)?;
         self.extras.write().await.insert(
@@ -328,6 +406,9 @@ impl DownloadManager {
                 referrer,
                 cookies,
                 filename_explicit,
+                media_kind,
+                quality,
+                media_page,
             },
         );
         self.tasks.write().await.insert(id, task.clone());
@@ -342,6 +423,7 @@ impl DownloadManager {
         ) {
             bail!("This task cannot be started in its current state");
         }
+        self.queued.write().await.remove(id);
         let (tx, rx) = watch::channel(Control::Run);
         self.controls.lock().await.insert(id.to_string(), tx);
         self.update(id, |t| {
@@ -394,16 +476,16 @@ impl DownloadManager {
             let _ = tx.send(Control::Cancel);
         }
         if delete_file {
-            let part = part_path(&PathBuf::from(&task.destination));
+            let destination = PathBuf::from(&task.destination);
+            let part = part_path(&destination);
             let _ = fs::remove_file(part).await;
-            if task.status == DownloadStatus::Completed {
-                let _ = fs::remove_file(&task.destination).await;
-            }
+            let _ = fs::remove_file(&destination).await;
         }
         self.store.delete(id)?;
         self.tasks.write().await.remove(id);
         self.extras.write().await.remove(id);
         self.gates.lock().await.remove(id);
+        self.queued.write().await.remove(id);
         Ok(())
     }
 
@@ -412,7 +494,14 @@ impl DownloadManager {
         if is_torrent_url(&task.url) {
             return self.run_torrent(id, control).await;
         }
-        if is_youtube_url(&task.url) {
+        let wants_media = self
+            .extras
+            .read()
+            .await
+            .get(id)
+            .map(|extras| extras.media_kind.is_some())
+            .unwrap_or(false);
+        if wants_media || is_youtube_url(&task.url) {
             return self.run_ytdlp(id, control).await;
         }
 
@@ -442,7 +531,7 @@ impl DownloadManager {
 
         let task = self.get(id).await?;
         let destination = PathBuf::from(&task.destination);
-        let total = probe.as_ref().and_then(|p| p.total);
+        let total = probe.as_ref().and_then(|p| p.total).filter(|n| *n > 0);
         let accept_ranges = probe.as_ref().map(|p| p.accept_ranges).unwrap_or(false);
 
         let segments = if accept_ranges {
@@ -495,7 +584,8 @@ impl DownloadManager {
                 content_range
                     .as_deref()
                     .and_then(|v| v.rsplit('/').next())
-                    .and_then(|v| v.trim().parse::<u64>().ok()),
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .filter(|n| *n > 0),
                 true,
             ),
             // Empty file: "bytes */0".
@@ -503,11 +593,12 @@ impl DownloadManager {
                 content_range
                     .as_deref()
                     .and_then(|v| v.rsplit('/').next())
-                    .and_then(|v| v.trim().parse::<u64>().ok()),
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .filter(|n| *n > 0),
                 false,
             ),
             // The server ignored Range and answered with the whole body.
-            s if s.is_success() => (response.content_length(), false),
+            s if s.is_success() => (response.content_length().filter(|n| *n > 0), false),
             _ => return None,
         };
         Some(Probe {
@@ -569,9 +660,6 @@ impl DownloadManager {
     /// Use the server's `Content-Disposition` name unless the user chose one
     /// or a partial download already exists under the current name.
     async fn apply_server_filename(&self, id: &str, probe: &Probe) -> Result<()> {
-        let Some(name) = probe.filename.clone() else {
-            return Ok(());
-        };
         let explicit = self
             .extras
             .read()
@@ -583,6 +671,15 @@ impl DownloadManager {
             return Ok(());
         }
         let task = self.get(id).await?;
+        // Prefer Content-Disposition. If the server only gave a content type,
+        // use it to turn a random extension-less path into `name.mp4` etc.
+        let name = match probe.filename.clone() {
+            Some(name) => name,
+            None => match probe.content_type.as_deref() {
+                Some(content_type) => net::ensure_extension(&task.filename, content_type),
+                None => return Ok(()),
+            },
+        };
         if task.filename == name {
             return Ok(());
         }
@@ -621,11 +718,18 @@ impl DownloadManager {
         let headers = build_request_headers(referrer, cookies);
         let (_, probe) = self.probe_resolved(url, &headers).await;
         match probe {
-            Some(p) if !p.is_html() => ProbeInfo {
-                size: p.total,
-                content_type: p.content_type,
-                filename: p.filename,
-            },
+            Some(p) if !p.is_html() => {
+                let filename = p.filename.clone().or_else(|| {
+                    p.content_type
+                        .as_deref()
+                        .map(|content_type| net::ensure_extension(&net::filename_from_url(url), content_type))
+                });
+                ProbeInfo {
+                    size: p.total,
+                    content_type: p.content_type,
+                    filename,
+                }
+            }
             _ => ProbeInfo::default(),
         }
     }
@@ -842,9 +946,14 @@ impl DownloadManager {
         }
         if paused {
             let d = downloaded.load(Ordering::Relaxed);
+            let queued = self.is_queued(id).await;
             self.update(id, |t| {
                 t.downloaded = d;
-                t.status = DownloadStatus::Paused;
+                t.status = if queued {
+                    DownloadStatus::Queued
+                } else {
+                    DownloadStatus::Paused
+                };
             })
             .await?;
             return Ok(());
@@ -910,6 +1019,7 @@ impl DownloadManager {
             t.downloaded = total;
             t.total = Some(total);
             t.status = DownloadStatus::Completed;
+            t.completed_at = Some(now());
             t.error = None;
         })
         .await?;
@@ -954,7 +1064,13 @@ impl DownloadManager {
                         if !paused {
                             let _ = session.pause(&handle).await;
                             paused = true;
-                            self.update(id, |t| t.status = DownloadStatus::Paused).await.ok();
+                            let queued = self.is_queued(id).await;
+                            let status = if queued {
+                                DownloadStatus::Queued
+                            } else {
+                                DownloadStatus::Paused
+                            };
+                            self.update(id, |t| t.status = status).await.ok();
                         }
                     }
                     Control::Cancel => {
@@ -1002,6 +1118,7 @@ impl DownloadManager {
                 t.total = Some(stats.total_bytes);
             }
             t.status = DownloadStatus::Completed;
+            t.completed_at = Some(now());
             t.error = None;
         })
         .await?;
@@ -1062,115 +1179,204 @@ impl DownloadManager {
     }
 
     async fn run_ytdlp(&self, id: &str, mut control: watch::Receiver<Control>) -> Result<()> {
-        use tokio::io::AsyncBufReadExt;
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt};
         let task = self.get(id).await?;
-        let destination = std::path::PathBuf::from(&task.destination);
+        let extras = self.extras.read().await.get(id).cloned().unwrap_or_default();
+        let kind = extras.media_kind.as_deref().unwrap_or("video").to_string();
+        let quality = extras.quality.as_deref().unwrap_or("best").to_string();
+        let destination = PathBuf::from(&task.destination);
         let out_dir = if destination.is_dir() {
             destination.clone()
         } else if let Some(parent) = destination.parent() {
             parent.to_path_buf()
         } else {
-            std::path::PathBuf::from(".")
+            PathBuf::from(".")
         };
-        tokio::fs::create_dir_all(&out_dir).await?;
+        fs::create_dir_all(&out_dir).await?;
 
-        // Resolve (and auto-install if necessary) the yt-dlp binary.
         let ytdlp = self.ensure_ytdlp().await?;
+        let mut sources = Vec::new();
+        if let Some(page) = extras.media_page.as_deref() {
+            if page != task.url {
+                sources.push(page.to_string());
+            }
+        }
+        sources.push(task.url.clone());
 
+        let mut last_error = String::new();
+        let mut produced: Option<PathBuf> = None;
+        for source in sources {
+            self.update(id, |t| {
+                t.status = DownloadStatus::Downloading;
+                t.downloaded = 0;
+                t.total = None;
+                t.error = None;
+            })
+            .await?;
+
+            // Keep yt-dlp's temporary files away from the user's download
+            // directory, otherwise an old file can be mistaken for the output.
+            let work_dir = out_dir.join(format!(".rdm-media-{}", Uuid::new_v4()));
+            fs::create_dir_all(&work_dir).await?;
+            let template = work_dir.join("%(title).200s.%(ext)s");
+            let mut args: Vec<String> = vec![
+                "--no-playlist".into(),
+                "--newline".into(),
+                "--no-warnings".into(),
+                "-o".into(),
+                template.to_string_lossy().to_string(),
+            ];
+            if kind == "audio" {
+                args.extend([
+                    "-x".into(),
+                    "--audio-format".into(),
+                    "mp3".into(),
+                    "--audio-quality".into(),
+                    "0".into(),
+                ]);
+            } else {
+                args.extend([
+                    "-f".into(),
+                    video_format(&quality),
+                    "--merge-output-format".into(),
+                    "mp4".into(),
+                ]);
+            }
+            if let Some(limit) = task.speed_limit.filter(|value| *value > 0) {
+                args.extend(["-r".into(), limit.to_string()]);
+            }
+            args.push(source);
+
+            let mut child = tokio::process::Command::new(&ytdlp)
+                .args(&args)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?;
+
+            let mut downloaded = 0u64;
+            let mut total = None;
+            let mut last_update = std::time::Instant::now();
+            if let Some(stdout) = child.stdout.take() {
+                let mut lines = tokio::io::BufReader::new(stdout).lines();
+                loop {
+                    tokio::select! {
+                        changed = control.changed() => {
+                            if changed.is_ok() {
+                                let state = *control.borrow();
+                                match state {
+                                    Control::Cancel => {
+                                        let _ = child.kill().await;
+                                        let _ = child.wait().await;
+                                        let _ = fs::remove_dir_all(&work_dir).await;
+                                        self.update(id, |t| t.status = DownloadStatus::Cancelled).await.ok();
+                                        return Ok(());
+                                    }
+                                    Control::Pause => {
+                                        let _ = child.kill().await;
+                                        let _ = child.wait().await;
+                                        let _ = fs::remove_dir_all(&work_dir).await;
+                                        let queued = self.is_queued(id).await;
+                                        self.update(id, |t| {
+                                            t.status = if queued {
+                                                DownloadStatus::Queued
+                                            } else {
+                                                DownloadStatus::Paused
+                                            };
+                                        })
+                                        .await
+                                        .ok();
+                                        return Ok(());
+                                    }
+                                    Control::Run => {}
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                        line = lines.next_line() => {
+                            match line {
+                                Ok(Some(line)) => {
+                                    if let Some((percent, size)) = parse_ytdlp_progress(&line) {
+                                        if size.is_some() {
+                                            total = size;
+                                        }
+                                        if let Some(total_bytes) = total {
+                                            downloaded = (percent / 100.0 * total_bytes as f64) as u64;
+                                        }
+                                        if last_update.elapsed() >= std::time::Duration::from_millis(500) {
+                                            self.update(id, |t| {
+                                                t.downloaded = downloaded;
+                                                if let Some(total_bytes) = total {
+                                                    t.total = Some(total_bytes);
+                                                }
+                                            })
+                                            .await?;
+                                            last_update = std::time::Instant::now();
+                                        }
+                                    }
+                                }
+                                _ => break,
+                            }
+                        }
+                    }
+                }
+            }
+
+            let status = child.wait().await?;
+            if status.success() {
+                if let Some(file) = newest_media_file(&work_dir, &kind).await {
+                    let name = file
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("media")
+                        .to_string();
+                    let final_path = unique_path(&out_dir.join(&name));
+                    fs::rename(&file, &final_path)
+                        .await
+                        .context("Could not move the downloaded media file")?;
+                    produced = Some(final_path);
+                    let _ = fs::remove_dir_all(&work_dir).await;
+                    break;
+                }
+                last_error = "yt-dlp finished without an output file".to_string();
+            } else {
+                last_error = if let Some(mut stderr) = child.stderr.take() {
+                    let mut buf = Vec::new();
+                    let _ = stderr.read_to_end(&mut buf).await;
+                    let text = String::from_utf8_lossy(&buf).trim().to_string();
+                    if text.is_empty() {
+                        "yt-dlp failed".to_string()
+                    } else {
+                        text
+                    }
+                } else {
+                    "yt-dlp failed".to_string()
+                };
+            }
+            let _ = fs::remove_dir_all(&work_dir).await;
+        }
+
+        let file = produced.ok_or_else(|| anyhow!("{}", last_error))?;
+        let size = fs::metadata(&file).await.map(|meta| meta.len()).unwrap_or(0);
+        if size == 0 {
+            let _ = fs::remove_file(&file).await;
+            bail!("The media file is empty: {}", file.display());
+        }
+        let final_name = file
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("media")
+            .to_string();
         self.update(id, |t| {
-            t.status = DownloadStatus::Downloading;
+            t.filename = final_name;
+            t.destination = file.to_string_lossy().to_string();
+            t.downloaded = size;
+            t.total = Some(size);
+            t.status = DownloadStatus::Completed;
+            t.completed_at = Some(now());
             t.error = None;
         })
         .await?;
-
-        let mut child = tokio::process::Command::new(&ytdlp)
-            .arg("--no-playlist")
-            .arg("-f")
-            .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best")
-            .arg("--merge-output-format")
-            .arg("mp4")
-            .arg("--newline")
-            .arg("-o")
-            .arg(out_dir.join("%(title).200s.%(ext)s"))
-            .arg(&task.url)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-
-        if let Some(stdout) = child.stdout.take() {
-            let mut lines = tokio::io::BufReader::new(stdout).lines();
-            loop {
-                tokio::select! {
-                    changed = control.changed() => {
-                        if changed.is_ok() {
-                            let st = *control.borrow();
-                            if st == Control::Cancel {
-                                let _ = child.kill().await;
-                                self.update(id, |t| t.status = DownloadStatus::Cancelled).await.ok();
-                                return Ok(());
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                    line = lines.next_line() => {
-                        match line {
-                            Ok(Some(_line)) => {}
-                            Ok(None) => break,
-                            Err(_) => break,
-                        }
-                    }
-                }
-            }
-        }
-
-        let status = child.wait().await?;
-        if !status.success() {
-            let msg = if let Some(stderr) = child.stderr.take() {
-                use tokio::io::AsyncReadExt;
-                let mut buf = Vec::new();
-                let mut r = stderr;
-                let _ = r.read_to_end(&mut buf).await;
-                String::from_utf8_lossy(&buf).to_string()
-            } else {
-                "yt-dlp failed".to_string()
-            };
-            return Err(anyhow!("{}", msg.trim()));
-        }
-
-        // Find the produced file (best effort: newest file in out_dir)
-        let mut newest: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
-        if let Ok(mut entries) = tokio::fs::read_dir(&out_dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                if let Ok(meta) = entry.metadata().await {
-                    if meta.is_file() {
-                        if let Ok(modified) = meta.modified() {
-                            if newest.as_ref().map(|(_, t)| modified > *t).unwrap_or(true) {
-                                newest = Some((entry.path(), modified));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if let Some((file, _)) = newest {
-            let size = tokio::fs::metadata(&file).await.map(|m| m.len()).unwrap_or(0);
-            self.update(id, |t| {
-                t.filename = file.file_name().unwrap_or_default().to_string_lossy().to_string();
-                t.destination = file.to_string_lossy().to_string();
-                t.downloaded = size;
-                t.total = Some(size);
-                t.status = DownloadStatus::Completed;
-                t.error = None;
-            })
-            .await?;
-        } else {
-            self.update(id, |t| {
-                t.status = DownloadStatus::Completed;
-                t.error = None;
-            })
-            .await?;
-        }
         Ok(())
     }
 
@@ -1236,7 +1442,7 @@ impl DownloadManager {
             );
         }
 
-        let content_length = response.content_length();
+        let content_length = response.content_length().filter(|n| *n > 0);
         let mut total = if append {
             content_length.map(|n| n.saturating_add(existing))
         } else {
@@ -1250,7 +1456,7 @@ impl DownloadManager {
                 .send()
                 .await
             {
-                total = head.content_length();
+                total = head.content_length().filter(|n| *n > 0);
             }
         }
         if total.is_none() {
@@ -1299,9 +1505,14 @@ impl DownloadManager {
                     match control_state {
                         Control::Pause => {
                             file.flush().await?;
+                            let queued = self.is_queued(id).await;
                             self.update(id, |t| {
                                 t.downloaded = downloaded;
-                                t.status = DownloadStatus::Paused;
+                                t.status = if queued {
+                                    DownloadStatus::Queued
+                                } else {
+                                    DownloadStatus::Paused
+                                };
                             }).await?;
                             return Ok(());
                         }
@@ -1367,6 +1578,7 @@ impl DownloadManager {
         }
         self.update(id, |t| {
             t.status = DownloadStatus::Completed;
+            t.completed_at = Some(now());
         })
         .await?;
         Ok(())
@@ -1393,6 +1605,101 @@ impl DownloadManager {
         self.store.upsert(task)?;
         Ok(())
     }
+}
+
+fn video_format(quality: &str) -> String {
+    match quality.parse::<u32>() {
+        Ok(height) => format!(
+            "bv*[height<={height}]+ba/b[height<={height}]/b[height<={height}]"
+        ),
+        Err(_) => "bv*+ba/b".to_string(),
+    }
+}
+
+fn parse_size_text(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let split = value
+        .find(|ch: char| !ch.is_ascii_digit() && ch != '.')
+        .unwrap_or(value.len());
+    let number: f64 = value[..split].parse().ok()?;
+    let unit = value[split..].trim().to_ascii_lowercase();
+    let multiplier = match unit.as_str() {
+        "kib" | "kb" => 1024.0,
+        "mib" | "mb" => 1024.0 * 1024.0,
+        "gib" | "gb" => 1024.0 * 1024.0 * 1024.0,
+        "tib" | "tb" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => 1.0,
+    };
+    Some((number * multiplier) as u64)
+}
+
+/// Parse a line such as `[download]  12.3% of 10.00MiB at 1.2MiB/s ETA 00:08`.
+fn parse_ytdlp_progress(line: &str) -> Option<(f64, Option<u64>)> {
+    let percent = line
+        .split('%')
+        .next()?
+        .split_whitespace()
+        .last()?
+        .parse::<f64>()
+        .ok()?;
+    if !(0.0..=100.0).contains(&percent) {
+        return None;
+    }
+    let total = line
+        .split(" of ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(parse_size_text)
+        .filter(|value| *value > 0);
+    Some((percent, total))
+}
+
+async fn newest_media_file(dir: &Path, kind: &str) -> Option<PathBuf> {
+    let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
+    let mut entries = fs::read_dir(dir).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".part") || lower.ends_with(".ytdl") || lower.ends_with(".temp") {
+            continue;
+        }
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let expected = if kind == "audio" {
+            matches!(
+                extension.as_str(),
+                "mp3" | "m4a" | "opus" | "aac" | "flac" | "wav" | "ogg"
+            )
+        } else {
+            matches!(
+                extension.as_str(),
+                "mp4" | "mkv" | "webm" | "mov" | "avi"
+            )
+        };
+        if !expected {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata().await {
+            if meta.is_file() {
+                if let Ok(modified) = meta.modified() {
+                    if newest
+                        .as_ref()
+                        .map(|(_, current)| modified > *current)
+                        .unwrap_or(true)
+                    {
+                        newest = Some((path, modified));
+                    }
+                }
+            }
+        }
+    }
+    newest.map(|(path, _)| path)
 }
 
 fn validate_url(value: &str) -> Result<()> {

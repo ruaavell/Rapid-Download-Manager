@@ -62,6 +62,7 @@ def main():
             "referrer": optional_text("referrer"),
             "filename": optional_text("filename"),
             "cookies": optional_text("cookies"),
+            "media": bool(msg.get("media")),
         }
         # Cookies are credentials: keep the inbox readable by the owner only.
         inbox.touch(mode=0o600, exist_ok=True)
