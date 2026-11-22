@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.6] - 2026-11-22
 
 ### Fixed
 - Downloads sent from the browser are now shown in the main window for confirmation (the dialog previously only existed in a window that was never opened).
