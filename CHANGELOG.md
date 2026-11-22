@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.9] - 2026-11-22
+
+### Fixed
+- Video button now scans shadow DOM and rescans periodically for Reddit/X-style players.
+
 ## [1.0.8] - 2026-11-22
 
 ### Fixed
