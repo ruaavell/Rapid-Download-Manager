@@ -140,11 +140,11 @@ function attachRdmButton(target, containerOverride) {
     let url = "";
     if (target.tagName === "VIDEO") url = target.currentSrc || target.src || "";
     else url = getPlayerSrc(target);
-    // Age-restricted / login-gated X videos often expose only a blob: src to
-    // the page. Recover the real media URL from the browser's resource timing
-    // entries so we can download it directly instead of asking yt-dlp to parse
-    // the tweet (which fails for NSFW tweets).
-    if (!url || url.startsWith("blob:")) {
+    // Only recover a direct media URL on X/Twitter, where age-restricted tweets
+    // cannot be parsed by yt-dlp. On other sites (Reddit, ...) use the post's
+    // permalink so the correct video is downloaded.
+    const isX = location.hostname.includes("x.com") || location.hostname.includes("twitter.com");
+    if (isX && (!url || url.startsWith("blob:"))) {
       const recovered = latestMediaUrl();
       if (recovered) url = recovered;
     }
