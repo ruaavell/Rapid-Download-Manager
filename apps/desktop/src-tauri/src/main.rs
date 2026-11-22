@@ -4,6 +4,9 @@ use std::sync::Arc;
 use tauri::{menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::sync::Mutex;
 
+/// Keep in sync with `browser-extension/manifest.json`.
+const BROWSER_EXTENSION_VERSION: &str = "1.0.7";
+
 struct PendingDownload {
     id: String,
     url: String,
@@ -15,6 +18,14 @@ struct PendingDownload {
     filename_known: bool,
     size: Option<u64>,
     content_type: Option<String>,
+    media: bool,
+}
+
+#[derive(Serialize)]
+struct TaskView {
+    #[serde(flatten)]
+    task: DownloadTask,
+    segments: Vec<rdm_core::SegmentProgress>,
 }
 
 #[derive(Serialize, Clone)]
@@ -25,6 +36,7 @@ struct PendingPayload {
     filename: String,
     size: Option<u64>,
     content_type: Option<String>,
+    media: bool,
 }
 
 struct AppState {
@@ -38,6 +50,8 @@ struct AddPayload {
     destination: String,
     filename: Option<String>,
     speed_limit: Option<u64>,
+    media_kind: Option<String>,
+    quality: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +60,8 @@ struct ConfirmPayload {
     destination: String,
     filename: Option<String>,
     speed_limit: Option<u64>,
+    media_kind: Option<String>,
+    quality: Option<String>,
 }
 
 #[tauri::command]
@@ -163,10 +179,13 @@ async fn import_browser_inbox_inner(state: &AppState) -> Result<usize, String> {
         };
         let referrer = text("referrer");
         let cookies = text("cookies");
-        // The browser already resolved the real file name (Content-Disposition etc.).
+        let media = parsed.get("media").and_then(|v| v.as_bool()).unwrap_or(false);
+        // The browser may only know a placeholder (Google Drive links end in
+        // `/download`), so reject those names and let the server decide.
         let hinted_name = text("filename")
             .map(|n| rdm_core::net::sanitize_filename(&n))
-            .filter(|n| !n.is_empty());
+            .filter(|n| !n.is_empty())
+            .filter(|n| rdm_core::net::is_usable_filename_hint(n));
 
         let info = state
             .manager
@@ -186,6 +205,7 @@ async fn import_browser_inbox_inner(state: &AppState) -> Result<usize, String> {
             filename_known,
             size: info.size,
             content_type: info.content_type,
+            media,
         };
         state.pending.lock().await.push(pending);
         imported += 1;
@@ -212,6 +232,7 @@ async fn list_pending_downloads(state: State<'_, AppState>) -> Result<Vec<Pendin
             filename: p.filename.clone(),
             size: p.size,
             content_type: p.content_type.clone(),
+            media: p.media,
         })
         .collect())
 }
@@ -244,8 +265,11 @@ async fn confirm_pending_download(
             destination: payload.destination,
             filename,
             speed_limit: payload.speed_limit,
-            referrer: pending.referrer,
+            referrer: pending.referrer.clone(),
             cookies: pending.cookies,
+            media_kind: payload.media_kind,
+            quality: payload.quality,
+            media_page: pending.referrer,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -265,8 +289,14 @@ async fn dismiss_pending_download(id: String, state: State<'_, AppState>) -> Res
 }
 
 #[tauri::command]
-async fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>, String> {
-    Ok(state.manager.list().await)
+async fn list_downloads(state: State<'_, AppState>) -> Result<Vec<TaskView>, String> {
+    let tasks = state.manager.list().await;
+    let mut views = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let segments = state.manager.segment_progress(&task.id).await;
+        views.push(TaskView { task, segments });
+    }
+    Ok(views)
 }
 
 #[tauri::command]
@@ -284,6 +314,9 @@ async fn add_download(payload: AddPayload, state: State<'_, AppState>) -> Result
             speed_limit: payload.speed_limit,
             referrer: None,
             cookies: None,
+            media_kind: payload.media_kind,
+            quality: payload.quality,
+            media_page: None,
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -294,6 +327,29 @@ async fn add_download(payload: AddPayload, state: State<'_, AppState>) -> Result
 #[tauri::command]
 async fn pause_download(id: String, state: State<'_, AppState>) -> Result<(), String> {
     state.manager.pause(&id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_speed_limit(
+    id: String,
+    speed_limit: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .manager
+        .set_speed_limit(&id, speed_limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn enqueue_download(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.manager.enqueue(&id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn dequeue_download(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.manager.dequeue(&id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -385,7 +441,7 @@ async fn install_runtime_dependencies(
         let _ = tokio::fs::create_dir_all(&ext_dir).await;
         let ext_json = serde_json::json!({
             "external_crx": crx_dest.to_string_lossy(),
-            "external_version": "1.0.5"
+            "external_version": BROWSER_EXTENSION_VERSION
         });
         let _ = tokio::fs::write(
             ext_dir.join(format!("{}.json", ext_id)),
@@ -592,13 +648,30 @@ fn main() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut prev_pending = 0usize;
-                let mut prev_active = 0usize;
+                let mut prev_finished = 0usize;
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     let state = handle.state::<AppState>();
                     let _ = import_browser_inbox_inner(state.inner()).await;
                     let pending_count = state.pending.lock().await.len();
-                    let active_count = state.manager.list().await.iter().filter(|t| matches!(t.status, DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Paused | DownloadStatus::Merging)).count();
+                    let tasks = state.manager.list().await;
+                    let finished = tasks
+                        .iter()
+                        .filter(|t| matches!(t.status, DownloadStatus::Completed | DownloadStatus::Failed | DownloadStatus::Cancelled))
+                        .count();
+                    // Serial queue: when a download finishes, start the oldest
+                    // task that the user explicitly queued. Starting only on a
+                    // finished transition keeps "add to queue" from immediately
+                    // resuming the same active download.
+                    if finished > prev_finished {
+                        if let Some(next) = tasks
+                            .iter()
+                            .filter(|t| t.status == DownloadStatus::Queued)
+                            .min_by_key(|t| t.created_at)
+                        {
+                            let _ = state.manager.start(&next.id).await;
+                        }
+                    }
                     // The confirmation dialog lives in the main window, so bring it
                     // forward when a browser download is waiting.
                     if pending_count > prev_pending {
@@ -607,9 +680,8 @@ fn main() {
                             let _ = window.set_focus();
                         }
                     }
-                    let _ = (active_count, prev_active);
                     prev_pending = pending_count;
-                    prev_active = active_count;
+                    prev_finished = finished;
                 }
             });
             Ok(())
@@ -635,6 +707,9 @@ fn main() {
             dismiss_pending_download,
             add_download,
             pause_download,
+            set_speed_limit,
+            enqueue_download,
+            dequeue_download,
             resume_download,
             cancel_download,
             remove_download

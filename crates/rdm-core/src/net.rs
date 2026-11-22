@@ -195,6 +195,47 @@ pub fn is_html_content_type(content_type: &str) -> bool {
     base == "text/html" || base == "application/xhtml+xml"
 }
 
+/// Extension commonly used for a media content type.
+pub fn extension_for_content_type(content_type: &str) -> Option<&'static str> {
+    let base = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    Some(match base.as_str() {
+        "video/mp4" | "application/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/x-matroska" => "mkv",
+        "video/quicktime" => "mov",
+        "video/x-msvideo" => "avi",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/mp4" | "audio/x-m4a" => "m4a",
+        "audio/aac" => "aac",
+        "audio/ogg" | "application/ogg" => "ogg",
+        "audio/flac" | "audio/x-flac" => "flac",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "application/vnd.apple.mpegurl" | "application/x-mpegurl" => "m3u8",
+        "application/dash+xml" => "mpd",
+        _ => return None,
+    })
+}
+
+/// Add an extension derived from the content type when the name has none.
+pub fn ensure_extension(name: &str, content_type: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() {
+        return name.to_string();
+    }
+    if name.rsplit_once('.').is_some() {
+        return name.to_string();
+    }
+    match extension_for_content_type(content_type) {
+        Some(ext) => format!("{name}.{ext}"),
+        None => name.to_string(),
+    }
+}
+
 /// True when the file name has an extension that is not a web page extension,
 /// e.g. `gta3.rar`. Names without an extension return false.
 pub fn has_non_html_extension(filename: &str) -> bool {
@@ -209,6 +250,28 @@ pub fn has_non_html_extension(filename: &str) -> bool {
         ext.as_str(),
         "html" | "htm" | "xhtml" | "shtml" | "php" | "asp" | "aspx" | "jsp" | "cgi"
     )
+}
+
+/// Whether a file name suggested by the browser is specific enough to trust.
+///
+/// Chrome's downloads API reports placeholders such as `download` (Google
+/// Drive links end in `/download`) when it only saw a web page. Saving under
+/// those names produces extension-less files that cannot be opened, so the
+/// server's `Content-Disposition` name should win instead.
+pub fn is_usable_filename_hint(filename: &str) -> bool {
+    let name = filename.trim();
+    if name.is_empty() {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "download" | "download.bin" | "file" | "file.bin" | "unknown" | "blob"
+    ) {
+        return false;
+    }
+    let ext = lower.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
+    !matches!(ext, "html" | "htm" | "xhtml" | "shtml")
 }
 
 /// Host part of an http(s) URL, lowercased.
@@ -411,6 +474,26 @@ mod tests {
         assert!(!has_non_html_extension("index.html"));
         assert!(!has_non_html_extension("download"));
         assert!(!has_non_html_extension("page.php"));
+        assert_eq!(extension_for_content_type("video/mp4; charset=binary"), Some("mp4"));
+        assert_eq!(extension_for_content_type("audio/mpeg"), Some("mp3"));
+        assert_eq!(ensure_extension("videoplayback", "video/mp4"), "videoplayback.mp4");
+        assert_eq!(ensure_extension("song.mp3", "video/mp4"), "song.mp3");
+    }
+
+    #[test]
+    fn filename_hints() {
+        // Real names from Content-Disposition are trusted.
+        assert!(is_usable_filename_hint("gta3.rar"));
+        assert!(is_usable_filename_hint("Güzel dosya.zip"));
+        assert!(is_usable_filename_hint("README"));
+        // Browser placeholders and saved web pages are not.
+        assert!(!is_usable_filename_hint("download"));
+        assert!(!is_usable_filename_hint("Download"));
+        assert!(!is_usable_filename_hint("download.bin"));
+        assert!(!is_usable_filename_hint("file"));
+        assert!(!is_usable_filename_hint("index.html"));
+        assert!(!is_usable_filename_hint("page.HTM"));
+        assert!(!is_usable_filename_hint("  "));
     }
 
     #[test]

@@ -38,9 +38,12 @@ impl TaskStore {
                status TEXT NOT NULL,
                speed_limit INTEGER,
                error TEXT,
-               created_at INTEGER NOT NULL
+               created_at INTEGER NOT NULL,
+               completed_at INTEGER
              );",
         )?;
+        // Databases created by older versions do not have this column.
+        let _ = conn.execute("ALTER TABLE downloads ADD COLUMN completed_at INTEGER", []);
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -53,12 +56,13 @@ impl TaskStore {
             .map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
         conn.execute(
             "INSERT INTO downloads
-             (id,url,filename,destination,downloaded,total,status,speed_limit,error,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+             (id,url,filename,destination,downloaded,total,status,speed_limit,error,created_at,completed_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
              ON CONFLICT(id) DO UPDATE SET
                url=excluded.url,filename=excluded.filename,destination=excluded.destination,
                downloaded=excluded.downloaded,total=excluded.total,status=excluded.status,
-               speed_limit=excluded.speed_limit,error=excluded.error",
+               speed_limit=excluded.speed_limit,error=excluded.error,
+               completed_at=excluded.completed_at",
             params![
                 task.id,
                 task.url,
@@ -69,7 +73,8 @@ impl TaskStore {
                 status_string(&task.status),
                 task.speed_limit.map(|v| v as i64),
                 task.error,
-                task.created_at
+                task.created_at,
+                task.completed_at
             ],
         )?;
         Ok(())
@@ -81,7 +86,7 @@ impl TaskStore {
             .lock()
             .map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
         let mut stmt = conn.prepare(
-            "SELECT id,url,filename,destination,downloaded,total,status,speed_limit,error,created_at
+            "SELECT id,url,filename,destination,downloaded,total,status,speed_limit,error,created_at,completed_at
              FROM downloads ORDER BY created_at DESC"
         )?;
         let rows = stmt.query_map([], |row| {
@@ -97,6 +102,7 @@ impl TaskStore {
                 speed_limit: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
                 error: row.get(8)?,
                 created_at: row.get(9)?,
+                completed_at: row.get(10)?,
             })
         })?;
         Ok(rows.filter_map(std::result::Result::ok).collect())
@@ -117,6 +123,7 @@ fn status_string(s: &DownloadStatus) -> &'static str {
         DownloadStatus::Queued => "queued",
         DownloadStatus::Downloading => "downloading",
         DownloadStatus::Paused => "paused",
+        DownloadStatus::Verifying => "verifying",
         DownloadStatus::Completed => "completed",
         DownloadStatus::Failed => "failed",
         DownloadStatus::Cancelled => "cancelled",
@@ -128,6 +135,7 @@ fn parse_status(s: &str) -> DownloadStatus {
     match s {
         "downloading" => DownloadStatus::Downloading,
         "paused" => DownloadStatus::Paused,
+        "verifying" => DownloadStatus::Verifying,
         "completed" => DownloadStatus::Completed,
         "failed" => DownloadStatus::Failed,
         "cancelled" => DownloadStatus::Cancelled,

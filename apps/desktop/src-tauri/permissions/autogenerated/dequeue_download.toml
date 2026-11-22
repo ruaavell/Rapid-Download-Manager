@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dequeue-download"
+description = "Enables the dequeue_download command without any pre-configured scope."
+commands.allow = ["dequeue_download"]
+
+[[permission]]
+identifier = "deny-dequeue-download"
+description = "Denies the dequeue_download command without any pre-configured scope."
+commands.deny = ["dequeue_download"]
