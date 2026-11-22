@@ -388,7 +388,7 @@ async fn install_runtime_dependencies(
         let _ = tokio::fs::create_dir_all(&ext_dir).await;
         let ext_json = serde_json::json!({
             "external_crx": crx_dest.to_string_lossy(),
-            "external_version": "1.0.0"
+            "external_version": "1.0.1"
         });
         let _ = tokio::fs::write(
             ext_dir.join(format!("{}.json", ext_id)),
@@ -403,7 +403,10 @@ async fn install_runtime_dependencies(
             "description": "RDM Native Messaging Host",
             "path": host_dest.to_string_lossy(),
             "type": "stdio",
-            "allowed_origins": [format!("chrome-extension://{}/", ext_id)]
+            "allowed_origins": [
+                format!("chrome-extension://{}/", ext_id),
+                "chrome-extension://cihhnonjpjnnaabnjgkalnoonokkchaa/".to_string()
+            ]
         });
         let _ = tokio::fs::write(
             native_dir.join("io.github.ruaavell.rdm.json"),

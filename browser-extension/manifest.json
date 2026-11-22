@@ -1,8 +1,15 @@
 {
   "manifest_version": 3,
   "name": "RDM Browser Integration",
-  "version": "1.0.0",
-  "description": "Send download links to RDM.","permissions": ["contextMenus", "nativeMessaging", "notifications", "downloads", "storage"],
+  "version": "1.0.1",
+  "description": "Send download links to RDM.",
+  "permissions": [
+    "contextMenus",
+    "nativeMessaging",
+    "notifications",
+    "downloads",
+    "storage"
+  ],
   "host_permissions": [
     "http://*/*",
     "https://*/*"
@@ -12,8 +19,13 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }
@@ -33,5 +45,5 @@
       "128": "icons/icon128.png"
     }
   },
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2dtMvnf5Z41abFu9f136KN4/g7ZTUAqKDPisYq7OX2n5h0sc9Sf6dC9FztW8g+gpB3mxAEFV9v5qu7Vop4Fr3rMTfMRa9dY4HKfKJoIQUcx1hyh0yMOf3t/1+AO+GVI16jvZ3jnSsL//c2y5HKKg82V73l5xcyHvLUUh5bWdTKXNkGutWX5uNy+UXDRH6mu6MSlxmefTwg2jhf6uvhaayjYpFKIBbEoEij8vy6T+WPzjRHOSaTOZd5fgeTq8+j6wxcB6qewATDvYja8rCJVNtyHdOF3NLHtbUGI3oWTMO/blprhqkYBp+Y1mlsY0vk4Y5Q62VjBJO/pQOMtkmgtJewIDAQAB"
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArWd2z9ngRTm4F9VoAYVZ1LeOTA4szcKXuKciBu60nV0HhtxaodQo6nrnq4rt4gXWnQQec94jZW4VjurTTSmEHMkTPdH3CF74obnaAI2IvMc9I22F6uKyvY4u7XAXmT0BlRa+Pn1FSQ9Bld/PtQ5k87kRBeemCPKbAxNTn8PXrEiW6ClMkJLoFFY41BlXkbsaJBoUyEGTqOYauYFHZ8kyz6AHHoNPSeScHBDJcOrgVlG8CmRg6eg6rlzEmSVah8GilAwTkaXOxlXlxXVIAACKe1b9zuOwX7Kl6IEZjE6OoI1t849ddV9nPHnCHnyko6USf0ZY5IWrYf1/Yl2OYxNS3wIDAQAB"
 }
