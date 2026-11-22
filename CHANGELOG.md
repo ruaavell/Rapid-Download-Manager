@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.12] - 2026-11-22
+
+### Fixed
+- Reddit video posts now receive a Download button even when the player is lazy-loaded.
+- X age-restricted videos try to recover the direct media URL from browser resource timing; yt-dlp uses the syndication API as fallback.
+
 ## [1.0.11] - 2026-11-22
 
 ### Fixed
