@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.10] - 2026-11-22
+
+### Changed
+- yt-dlp now sends a browser-like user agent.
+
 ## [1.0.9] - 2026-11-22
 
 ### Fixed
