@@ -388,7 +388,7 @@ async fn install_runtime_dependencies(
         let _ = tokio::fs::create_dir_all(&ext_dir).await;
         let ext_json = serde_json::json!({
             "external_crx": crx_dest.to_string_lossy(),
-            "external_version": "1.0.1"
+            "external_version": "1.0.5"
         });
         let _ = tokio::fs::write(
             ext_dir.join(format!("{}.json", ext_id)),
@@ -429,6 +429,66 @@ async fn install_runtime_dependencies(
         serde_json::to_string_pretty(&ff_json).unwrap_or_default(),
     )
     .await;
+}
+
+#[tauri::command]
+async fn check_for_update() -> Result<Option<(String, String)>, String> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("RDM/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = match client
+        .get("https://api.github.com/repos/ruaavell/Rapid-Download-Manager-Linux/releases/latest")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    let json: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let tag = json.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").trim_start_matches('v').to_string();
+    let url = json.get("html_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if tag.is_empty() || url.is_empty() {
+        return Ok(None);
+    }
+    if version_is_newer(&tag, env!("CARGO_PKG_VERSION")) {
+        Ok(Some((tag, url)))
+    } else {
+        Ok(None)
+    }
+}
+
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    let parse = |s: &str| -> Vec<u64> {
+        s.split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect()
+    };
+    let a = parse(latest);
+    let b = parse(current);
+    let n = a.len().max(b.len());
+    for i in 0..n {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(&url)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn main() {
@@ -559,6 +619,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             open_folder,
+            check_for_update,
+            open_url,
             set_autostart,
             list_downloads,
             default_download_dir,

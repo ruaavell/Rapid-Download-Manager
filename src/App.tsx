@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   Archive, ArrowDownToLine, CheckCircle2, CirclePause, Clock3, File,
   FileText, Film, FolderOpen, Gauge, HardDriveDownload, Music, Pause,
@@ -50,6 +51,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autostart, setAutostart] = useState(false);
   const [globalSpeed, setGlobalSpeed] = useState(localStorage.getItem("rdm-global-speed") || "");
+  const [appVersion, setAppVersion] = useState("");
+  const [updateInfo, setUpdateInfo] = useState<{version: string; url: string} | null>(null);
 
   async function refresh() {
     try {
@@ -58,6 +61,10 @@ export default function App() {
   }
   useEffect(() => {
     invoke<string>("default_download_dir").then(setDestination).catch(e => setError(String(e)));
+    getVersion().then(setAppVersion).catch(() => setAppVersion("1.0.5"));
+    invoke<[string,string] | null>("check_for_update").then((res) => {
+      if (res) setUpdateInfo({ version: res[0], url: res[1] });
+    }).catch(() => {});
     refresh();
     const timer = window.setInterval(refresh, 1200);
     return () => window.clearInterval(timer);
@@ -136,6 +143,7 @@ export default function App() {
       </aside>
 
       <main className="content">
+        {updateInfo && <div className="error-banner" style={{background:"#1f3b5b"}}><span>Update available: RDM {updateInfo.version}</span><button onClick={()=>invoke("open_url",{url:updateInfo.url})}>Download</button><button onClick={()=>setUpdateInfo(null)}><X size={15}/></button></div>}
         <div className="content-heading"><div><h1>{filter === "all" ? "All downloads" : filter[0].toUpperCase()+filter.slice(1)}</h1><p>Manage and monitor your downloads</p></div><button className="add-button" onClick={()=>setModal(true)}><Plus size={17}/> New download</button></div>
         {error && <div className="error-banner"><span>{error}</span><button onClick={()=>setError("")}><X size={15}/></button></div>}
         <div className="table-head"><span>FILE NAME</span><span>SIZE / PROGRESS</span><span>STATUS</span><span>ACTIONS</span></div>
@@ -153,7 +161,7 @@ export default function App() {
             </div>
           </div>)}
         </div>
-        <footer className="statusbar"><span><span className="live-dot"/> Engine ready</span><span>{tasks.length} tasks</span><span>{tasks.filter(t=>t.status==="downloading").length} active</span><span>RDM 1.0.0</span></footer>
+        <footer className="statusbar"><span><span className="live-dot"/> Engine ready</span><span>{tasks.length} tasks</span><span>{tasks.filter(t=>t.status==="downloading").length} active</span><span>RDM {appVersion || "1.0.5"}</span></footer>
       </main>
     </div>
 

@@ -1,6 +1,6 @@
 pkgname=rdm
-pkgver=1.0.0
-pkgrel=1
+pkgver=1.0.5
+pkgrel=2
 pkgdesc="Rust-powered native Linux download manager"
 arch=('x86_64' 'aarch64')
 url="https://github.com/ruaavell/rdm"
