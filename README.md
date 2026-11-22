@@ -207,7 +207,7 @@ If the automatic registration did not work, install the pre-built CRX manually:
 7. Confirm the **RDM Browser Integration** extension (id `ddnikbhjakonmonnfeannoihpnpbcojf`) is enabled.
 8. <img width="1914" height="998" alt="chrome-4" src="https://github.com/user-attachments/assets/bd5c2924-e893-4abc-b8db-9526e5cd7d2e" />
 
- https://addons.mozilla.org/en-US/firefox/addon/rdm-browser-integration/
+
 
 Alternatively, load the unpacked source for development:
 
@@ -221,16 +221,7 @@ cd Rapid-Download-Manager-Linux
 
 Firefox does not load unsigned `.xpi` files permanently in release builds. Use one of these methods:
 
-1. **Temporary add-on (development / testing)**
-   - Open `about:debugging#/runtime/this-firefox`.
-   - Click **Load Temporary Add-on…** and select `browser-extension-firefox.xpi` (or any file inside `browser-extension/`, e.g. `manifest.json`).
-   - The add-on stays loaded until Firefox is closed.
-
-2. **Permanent install**
-   - The pre-built `browser-extension-firefox.xpi` is unsigned. For a permanent install, either sign it through [addons.mozilla.org](https://addons.mozilla.org/developers/) or disable signature checks in Firefox Developer Edition / Nightly (`xpinstall.signatures.required = false` in `about:config`).
-   - Then open the `.xpi` file with Firefox or drag it onto `about:addons`.
-
-The Firefox add-on id is `rdm-browser@example.org`, which matches the Native Messaging host registered by the desktop app.
+https://addons.mozilla.org/en-US/firefox/addon/rdm-browser-integration/
 
 ### Verifying the connection
 
