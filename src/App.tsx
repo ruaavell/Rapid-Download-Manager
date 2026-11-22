@@ -136,7 +136,7 @@ export default function App() {
   }, [currentPending?.id]);
   useEffect(() => {
     invoke<string>("default_download_dir").then(setDestination).catch(e => setError(String(e)));
-    getVersion().then(setAppVersion).catch(() => setAppVersion("1.0.12"));
+    getVersion().then(setAppVersion).catch(() => setAppVersion("1.0.13"));
     invoke<[string,string] | null>("check_for_update").then((res) => {
       if (res) setUpdateInfo({ version: res[0], url: res[1] });
     }).catch(() => {});
@@ -352,7 +352,7 @@ export default function App() {
           {allSegments.length > 0 && <span>{completedSegments}/{allSegments.length} parts</span>}
           <span>{tasks.length} tasks</span>
           <span>{activeTasks.length} active</span>
-          <span>RDM {appVersion || "1.0.12"}</span>
+          <span>RDM {appVersion || "1.0.13"}</span>
         </footer>
       </main>
     </div>

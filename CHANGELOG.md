@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.13] - 2026-11-22
+
+### Fixed
+- Reddit Download buttons no longer recover a global media URL; each post uses its own permalink.
+
 ## [1.0.12] - 2026-11-22
 
 ### Fixed
