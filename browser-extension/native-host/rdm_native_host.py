@@ -37,7 +37,11 @@ def main():
         msg = read_message()
         if msg is None:
             return
+        if msg.get("ping"):
+            write_message({"ok": True})
+            return
         url = msg.get("url", "")
+        action = msg.get("action", "add")
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError("only valid HTTP/HTTPS URLs are accepted")
@@ -47,7 +51,7 @@ def main():
         record = {"url": url, "referrer": msg.get("referrer")}
         with inbox.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
-        write_message({"ok": True})
+        write_message({"ok": True, "action": action})
     except Exception as exc:
         write_message({"ok": False, "error": str(exc)})
 

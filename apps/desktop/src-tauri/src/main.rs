@@ -91,12 +91,23 @@ async fn probe_url(url: String) -> Result<(Option<u64>, Option<String>, String),
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client.head(&url).send().await.map_err(|e| e.to_string())?;
-    let size = resp.content_length();
+    let mut size = resp.content_length();
     let content_type = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
+    if size.is_none() {
+        if let Ok(r2) = client.get(&url).header(reqwest::header::RANGE, "bytes=0-0").send().await {
+            if let Some(cr) = r2.headers().get(reqwest::header::CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
+                if let Some(total) = cr.rsplit('/').next().and_then(|s| s.trim().parse::<u64>().ok()) {
+                    if total > 0 { size = Some(total); }
+                }
+            } else if let Some(cl) = r2.content_length() {
+                if cl > 1 { size = Some(cl); }
+            }
+        }
+    }
     let filename = url::Url::parse(&url)
         .ok()
         .and_then(|u| {
@@ -143,12 +154,23 @@ async fn import_browser_inbox_inner(state: &AppState) -> Result<usize, String> {
         // probe metadata
         let (size, content_type, filename) = match client.head(url).send().await {
             Ok(resp) => {
-                let size = resp.content_length();
+                let mut size = resp.content_length();
                 let ct = resp
                     .headers()
                     .get(reqwest::header::CONTENT_TYPE)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string());
+                if size.is_none() {
+                    if let Ok(r2) = client.get(url).header(reqwest::header::RANGE, "bytes=0-0").send().await {
+                        if let Some(cr) = r2.headers().get(reqwest::header::CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
+                            if let Some(total) = cr.rsplit('/').next().and_then(|s| s.trim().parse::<u64>().ok()) {
+                                if total > 0 { size = Some(total); }
+                            }
+                        } else if let Some(cl) = r2.content_length() {
+                            if cl > 1 { size = Some(cl); }
+                        }
+                    }
+                }
                 let name = url::Url::parse(url)
                     .ok()
                     .and_then(|u| u.path_segments().and_then(|mut s| s.next_back()).map(str::to_owned))
@@ -237,7 +259,6 @@ async fn confirm_pending_download(
         .start(&task.id)
         .await
         .map_err(|e| e.to_string())?;
-    show_progress_window(&app);
     Ok(task)
 }
 
@@ -254,7 +275,7 @@ async fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>,
 }
 
 #[tauri::command]
-async fn add_download(payload: AddPayload, state: State<'_, AppState>, app: tauri::AppHandle) -> Result<DownloadTask, String> {
+async fn add_download(payload: AddPayload, state: State<'_, AppState>) -> Result<DownloadTask, String> {
     let dest = std::path::PathBuf::from(&payload.destination);
     if dest.extension().is_none() {
         let _ = std::fs::create_dir_all(&dest);
@@ -270,7 +291,6 @@ async fn add_download(payload: AddPayload, state: State<'_, AppState>, app: taur
         .await
         .map_err(|e| e.to_string())?;
     state.manager.start(&task.id).await.map_err(|e| e.to_string())?;
-    show_progress_window(&app);
     Ok(task)
 }
 
@@ -296,20 +316,6 @@ async fn remove_download(id: String, delete_file: bool, state: State<'_, AppStat
         .remove(&id, delete_file)
         .await
         .map_err(|e| e.to_string())
-}
-
-fn show_progress_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("progress") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return;
-    }
-    let _ = WebviewWindowBuilder::new(app, "progress", WebviewUrl::App("index.html?window=progress".into()))
-        .title("RDM Downloads")
-        .inner_size(440.0, 360.0)
-        .always_on_top(true)
-        .resizable(true)
-        .build();
 }
 
 async fn find_resource(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
@@ -533,9 +539,8 @@ fn main() {
                     let _ = import_browser_inbox_inner(state.inner()).await;
                     let pending_count = state.pending.lock().await.len();
                     let active_count = state.manager.list().await.iter().filter(|t| matches!(t.status, DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Paused | DownloadStatus::Merging)).count();
-                    if pending_count > prev_pending || active_count > prev_active {
-                        show_progress_window(&handle);
-                    }
+                    // Keep the downloads UI in the main window; do not pop up a separate progress window.
+                    let _ = (pending_count, active_count, prev_pending, prev_active);
                     prev_pending = pending_count;
                     prev_active = active_count;
                 }

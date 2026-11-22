@@ -803,6 +803,15 @@ impl DownloadManager {
                 total = head.content_length();
             }
         }
+        if total.is_none() {
+            if let Ok(r) = self.client.get(&task.url).header(reqwest::header::RANGE, "bytes=0-0").send().await {
+                if let Some(cr) = r.headers().get(reqwest::header::CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
+                    if let Some(t) = cr.rsplit('/').next().and_then(|s| s.trim().parse::<u64>().ok()) {
+                        if t > 0 { total = Some(t); }
+                    }
+                }
+            }
+        }
         self.update(id, |t| {
             t.downloaded = if append { existing } else { 0 };
             t.total = total;
