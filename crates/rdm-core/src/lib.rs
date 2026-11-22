@@ -1209,9 +1209,22 @@ impl DownloadManager {
         }
         sources.push(task.url.clone());
 
+        // X/Twitter: try the normal GraphQL extractor first (works for
+        // age-restricted/NSFW tweets when cookies are present), then fall back
+        // to the syndication API which is more reliable for public tweets.
+        let is_x = task.url.contains("x.com") || task.url.contains("twitter.com");
+        let mut attempts: Vec<(String, bool)> = Vec::new();
+        for source in &sources {
+            attempts.push((source.clone(), false));
+            if is_x {
+                attempts.push((source.clone(), true));
+            }
+        }
+
         let mut last_error = String::new();
         let mut produced: Option<PathBuf> = None;
-        for source in sources {
+        for (source, use_syndication) in attempts {
+            let source = source.clone();
             self.update(id, |t| {
                 t.status = DownloadStatus::Downloading;
                 t.downloaded = 0;
@@ -1257,9 +1270,8 @@ impl DownloadManager {
                 "--user-agent".into(),
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36".into(),
             ]);
-            // X/Twitter's graphql endpoints are frequently blocked; the syndication
-            // API is more reliable for extracting tweet media.
-            if task.url.contains("x.com") || task.url.contains("twitter.com") {
+            // Syndication is only a fallback: it cannot see age-restricted media.
+            if use_syndication {
                 args.extend([
                     "--extractor-args".into(),
                     "twitter:api=syndication".into(),

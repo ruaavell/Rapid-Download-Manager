@@ -140,14 +140,9 @@ function attachRdmButton(target, containerOverride) {
     let url = "";
     if (target.tagName === "VIDEO") url = target.currentSrc || target.src || "";
     else url = getPlayerSrc(target);
-    // Only recover a direct media URL on X/Twitter, where age-restricted tweets
-    // cannot be parsed by yt-dlp. On other sites (Reddit, ...) use the post's
-    // permalink so the correct video is downloaded.
-    const isX = location.hostname.includes("x.com") || location.hostname.includes("twitter.com");
-    if (isX && (!url || url.startsWith("blob:"))) {
-      const recovered = latestMediaUrl();
-      if (recovered) url = recovered;
-    }
+    // Use the post/page URL (plus browser cookies) as the media source. This
+    // keeps the correct video selected and lets yt-dlp handle age-restricted
+    // tweets through the authenticated GraphQL endpoint.
     const targetUrl = (url && !url.startsWith("blob:")) ? url : pageUrl;
     const directFile = /\.(mp4|webm|mkv|mov|m4v|mp3|m4a|flac|wav|ogg)(\?|#|$)/i.test(targetUrl);
     try {
