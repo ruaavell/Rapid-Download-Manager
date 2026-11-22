@@ -1237,6 +1237,54 @@ impl DownloadManager {
             // directory, otherwise an old file can be mistaken for the output.
             let work_dir = out_dir.join(format!(".rdm-media-{}", Uuid::new_v4()));
             fs::create_dir_all(&work_dir).await?;
+            // Materialise the browser cookies into a Netscape cookie jar so
+            // extractors that inspect the cookie store (notably X/Twitter's
+            // is_logged_in check) actually see the session. --add-headers
+            // alone only sends the header; it does not populate the jar.
+            let cookie_jar = if let Some(cookies) = extras.cookies.as_deref() {
+                let jar = work_dir.join("cookies.txt");
+                let mut body = String::from("# Netscape HTTP Cookie File\n");
+                // Derive candidate cookie domains from the source URL so that
+                // login-protected sites (Reddit, X, ...) keep their session,
+                // plus the X/Twitter hosts for age-restricted tweets.
+                let mut domains: Vec<String> = Vec::new();
+                if let Ok(url) = url::Url::parse(&source) {
+                    if let Some(host) = url.host_str() {
+                        domains.push(host.to_string());
+                        domains.push(format!(".{host}"));
+                        // Parent domain (e.g. reddit.com from www.reddit.com)
+                        let parts: Vec<&str> = host.split('.').collect();
+                        if parts.len() >= 2 {
+                            let parent = parts[parts.len() - 2..].join(".");
+                            domains.push(parent.clone());
+                            domains.push(format!(".{parent}"));
+                        }
+                    }
+                }
+                for d in [".x.com", "x.com", ".twitter.com", "twitter.com", "api.x.com"] {
+                    domains.push(d.to_string());
+                }
+                domains.sort();
+                domains.dedup();
+                for pair in cookies.split(';') {
+                    let pair = pair.trim();
+                    if pair.is_empty() { continue; }
+                    let (name, value) = match pair.split_once('=') {
+                        Some((n, v)) => (n.trim(), v.trim()),
+                        None => continue,
+                    };
+                    if name.is_empty() { continue; }
+                    for domain in &domains {
+                        body.push_str(&format!(
+                            "{domain}\tTRUE\t/\tTRUE\t2147483647\t{name}\t{value}\n"
+                        ));
+                    }
+                }
+                fs::write(&jar, body).await.ok();
+                Some(jar)
+            } else {
+                None
+            };
             let template = work_dir.join("%(title).200s.%(ext)s");
             let mut args: Vec<String> = vec![
                 "--no-playlist".into(),
@@ -1285,6 +1333,9 @@ impl DownloadManager {
             }
             if let Some(cookies) = extras.cookies.as_deref() {
                 args.extend(["--add-headers".into(), format!("Cookie: {cookies}")]);
+            }
+            if let Some(jar) = &cookie_jar {
+                args.extend(["--cookies".into(), jar.to_string_lossy().to_string()]);
             }
             args.push(source);
 

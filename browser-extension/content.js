@@ -86,23 +86,26 @@ function getPlayerSrc(player) {
 
 function attachRdmButton(target, containerOverride) {
   if (!target || target.dataset.rdmAttached === "1" || target.dataset.rdmHidden === "1") return;
-  target.dataset.rdmAttached = "1";
-
+  // Resolve the mount point first; if it is not ready yet, leave the
+  // element unmarked so the next scan can retry.
+  let parent = null;
   const isPlayer = target.tagName && /^shreddit-player/i.test(target.tagName);
   const video = (target.tagName === "VIDEO") ? target : getPlayerVideo(target);
-
-  let parent = null;
   if (containerOverride) {
     parent = containerOverride;
   } else if (location.hostname.includes("instagram.com") && video) {
     parent = resolveInstagramContainer(video);
-  } else if (isPlayer) {
-    parent = target.parentElement;
   } else {
     parent = target.parentElement;
   }
   if (!parent) return;
-  if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
+  target.dataset.rdmAttached = "1";
+
+  try {
+    if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
+  } catch (e) {}
+  // Avoid attaching twice when the same video is re-scanned.
+  if (parent.querySelector && parent.querySelector(":scope > .rdm-video-button-wrap")) return;
 
   const wrap = document.createElement("div");
   wrap.className = "rdm-video-button-wrap";
@@ -114,7 +117,9 @@ function attachRdmButton(target, containerOverride) {
     display: "flex",
     gap: "4px",
     alignItems: "center",
-    pointerEvents: "none"
+    pointerEvents: "auto",
+    opacity: "0.35",
+    transition: "opacity 0.25s ease"
   });
 
   const btn = document.createElement("button");
@@ -179,6 +184,42 @@ function attachRdmButton(target, containerOverride) {
 
   wrap.appendChild(btn);
   wrap.appendChild(close);
+
+  // Auto-hide: stay faintly visible, become fully visible on hover,
+  // and hide completely after 30s without hover.
+  let hideTimer = null;
+  const show = () => {
+    clearTimeout(hideTimer);
+    wrap.style.pointerEvents = "auto";
+    wrap.style.opacity = "1";
+  };
+  const scheduleHide = () => {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { wrap.style.opacity = "0"; }, 30000);
+  };
+  const reveal = () => {
+    show();
+    scheduleHide();
+  };
+  wrap.addEventListener("mouseenter", show, true);
+  wrap.addEventListener("mouseleave", () => { scheduleHide(); }, true);
+  btn.addEventListener("mouseenter", show, true);
+  close.addEventListener("mouseenter", show, true);
+  scheduleHide();
+
+  // Hide while a video is in fullscreen.
+  const onFsChange = () => {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      wrap.style.display = "none";
+    } else {
+      wrap.style.display = "flex";
+      wrap.style.opacity = "0.35";
+      scheduleHide();
+    }
+  };
+  document.addEventListener("fullscreenchange", onFsChange);
+  document.addEventListener("webkitfullscreenchange", onFsChange);
+
   parent.appendChild(wrap);
 }
 
