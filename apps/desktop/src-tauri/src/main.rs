@@ -5,7 +5,7 @@ use tauri::{menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIc
 use tokio::sync::Mutex;
 
 /// Keep in sync with `browser-extension/manifest.json`.
-const BROWSER_EXTENSION_VERSION: &str = "1.0.7";
+const BROWSER_EXTENSION_VERSION: &str = "1.0.8";
 
 struct PendingDownload {
     id: String,
