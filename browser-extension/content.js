@@ -102,8 +102,20 @@ function attachRdmButton(video) {
   parent.appendChild(wrap);
 }
 
+function deepQuerySelectorAll(selector, root) {
+  root = root || document;
+  const results = Array.from(root.querySelectorAll(selector));
+  const all = root.querySelectorAll ? Array.from(root.querySelectorAll("*")) : [];
+  for (const el of all) {
+    if (el.shadowRoot) {
+      results.push(...deepQuerySelectorAll(selector, el.shadowRoot));
+    }
+  }
+  return results;
+}
+
 function scanVideos() {
-  document.querySelectorAll("video").forEach(attachRdmButton);
+  deepQuerySelectorAll("video").forEach(attachRdmButton);
 }
 
 if (document.documentElement) {
@@ -115,3 +127,6 @@ if (document.readyState === "loading") {
 } else {
   scanVideos();
 }
+// Many sites (Reddit, X, ...) render players inside shadow roots or load them
+// lazily, so keep scanning periodically.
+setInterval(scanVideos, 2000);
