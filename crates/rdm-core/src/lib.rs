@@ -526,6 +526,12 @@ impl DownloadManager {
                      Start the download again from the browser while signed in."
                 );
             }
+            // A plain HTML response for a link the user expected to be media
+            // usually means an embedded player page. Hand it to yt-dlp before
+            // saving the HTML as a (useless) file.
+            if probe.is_html() {
+                return self.run_ytdlp(id, control).await;
+            }
             self.apply_server_filename(id, probe).await?;
         }
 
@@ -1244,6 +1250,15 @@ impl DownloadManager {
             }
             if let Some(limit) = task.speed_limit.filter(|value| *value > 0) {
                 args.extend(["-r".into(), limit.to_string()]);
+            }
+            // Forward the browser session so login-protected or referer-checked
+            // media (Reddit, X, ...) can be extracted the same way the browser
+            // would load it.
+            if let Some(referer) = extras.referrer.as_deref() {
+                args.extend(["--referer".into(), referer.to_string()]);
+            }
+            if let Some(cookies) = extras.cookies.as_deref() {
+                args.extend(["--add-header".into(), format!("Cookie: {cookies}")]);
             }
             args.push(source);
 
