@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Minimal Native Messaging host.
 
-This MVP safely receives URLs and appends them to an inbox JSONL file.
-The desktop UI handoff consumer is a follow-up integration; no shell command
-is executed and no URL is interpolated into a command.
+Receives download requests from the browser extension and appends them to an
+inbox JSONL file that the desktop app polls. The file name the browser already
+resolved and the cookies for the link are forwarded too: without them servers
+such as Google Drive answer with a web page and the saved file is misnamed and
+corrupt. Cookies only live in this owner-only file, which the desktop app
+deletes once it has read it. No shell command is executed and no URL is
+interpolated into a command.
 """
 import json
 import os
@@ -48,7 +52,20 @@ def main():
         base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "rdm"
         base.mkdir(parents=True, exist_ok=True)
         inbox = base / "browser-inbox.jsonl"
-        record = {"url": url, "referrer": msg.get("referrer")}
+
+        def optional_text(key):
+            value = msg.get(key)
+            return value.strip() if isinstance(value, str) and value.strip() else None
+
+        record = {
+            "url": url,
+            "referrer": optional_text("referrer"),
+            "filename": optional_text("filename"),
+            "cookies": optional_text("cookies"),
+        }
+        # Cookies are credentials: keep the inbox readable by the owner only.
+        inbox.touch(mode=0o600, exist_ok=True)
+        os.chmod(inbox, 0o600)
         with inbox.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
         write_message({"ok": True, "action": action})

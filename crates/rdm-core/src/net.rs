@@ -211,6 +211,28 @@ pub fn has_non_html_extension(filename: &str) -> bool {
     )
 }
 
+/// Whether a file name suggested by the browser is specific enough to trust.
+///
+/// Chrome's downloads API reports placeholders such as `download` (Google
+/// Drive links end in `/download`) when it only saw a web page. Saving under
+/// those names produces extension-less files that cannot be opened, so the
+/// server's `Content-Disposition` name should win instead.
+pub fn is_usable_filename_hint(filename: &str) -> bool {
+    let name = filename.trim();
+    if name.is_empty() {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "download" | "download.bin" | "file" | "file.bin" | "unknown" | "blob"
+    ) {
+        return false;
+    }
+    let ext = lower.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
+    !matches!(ext, "html" | "htm" | "xhtml" | "shtml")
+}
+
 /// Host part of an http(s) URL, lowercased.
 fn host_of(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
@@ -411,6 +433,22 @@ mod tests {
         assert!(!has_non_html_extension("index.html"));
         assert!(!has_non_html_extension("download"));
         assert!(!has_non_html_extension("page.php"));
+    }
+
+    #[test]
+    fn filename_hints() {
+        // Real names from Content-Disposition are trusted.
+        assert!(is_usable_filename_hint("gta3.rar"));
+        assert!(is_usable_filename_hint("Güzel dosya.zip"));
+        assert!(is_usable_filename_hint("README"));
+        // Browser placeholders and saved web pages are not.
+        assert!(!is_usable_filename_hint("download"));
+        assert!(!is_usable_filename_hint("Download"));
+        assert!(!is_usable_filename_hint("download.bin"));
+        assert!(!is_usable_filename_hint("file"));
+        assert!(!is_usable_filename_hint("index.html"));
+        assert!(!is_usable_filename_hint("page.HTM"));
+        assert!(!is_usable_filename_hint("  "));
     }
 
     #[test]

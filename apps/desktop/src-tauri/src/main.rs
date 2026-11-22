@@ -4,6 +4,9 @@ use std::sync::Arc;
 use tauri::{menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tokio::sync::Mutex;
 
+/// Keep in sync with `browser-extension/manifest.json`.
+const BROWSER_EXTENSION_VERSION: &str = "1.0.6";
+
 struct PendingDownload {
     id: String,
     url: String,
@@ -163,10 +166,12 @@ async fn import_browser_inbox_inner(state: &AppState) -> Result<usize, String> {
         };
         let referrer = text("referrer");
         let cookies = text("cookies");
-        // The browser already resolved the real file name (Content-Disposition etc.).
+        // The browser may only know a placeholder (Google Drive links end in
+        // `/download`), so reject those names and let the server decide.
         let hinted_name = text("filename")
             .map(|n| rdm_core::net::sanitize_filename(&n))
-            .filter(|n| !n.is_empty());
+            .filter(|n| !n.is_empty())
+            .filter(|n| rdm_core::net::is_usable_filename_hint(n));
 
         let info = state
             .manager
@@ -385,7 +390,7 @@ async fn install_runtime_dependencies(
         let _ = tokio::fs::create_dir_all(&ext_dir).await;
         let ext_json = serde_json::json!({
             "external_crx": crx_dest.to_string_lossy(),
-            "external_version": "1.0.5"
+            "external_version": BROWSER_EXTENSION_VERSION
         });
         let _ = tokio::fs::write(
             ext_dir.join(format!("{}.json", ext_id)),
