@@ -83,6 +83,71 @@ fn serve(body: Arc<Vec<u8>>) -> String {
 }
 
 #[tokio::test]
+async fn speed_limit_can_be_applied_and_removed_while_running() {
+    let body = Arc::new(payload());
+    let url = serve(body.clone());
+    let dir = std::env::temp_dir().join(format!("rdm-speed-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Downloads")).unwrap();
+    let manager = DownloadManager::new(TaskStore::open(dir.join("db.sqlite3")).unwrap()).unwrap();
+
+    let task = manager
+        .add(NewDownload {
+            url,
+            destination: dir.join("Downloads").to_string_lossy().to_string(),
+            filename: None,
+            speed_limit: None,
+            referrer: None,
+            cookies: None,
+        })
+        .await
+        .unwrap();
+    manager.start(&task.id).await.unwrap();
+    manager
+        .set_speed_limit(&task.id, Some(100 * 1024))
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let throttled = manager
+        .list()
+        .await
+        .into_iter()
+        .find(|item| item.id == task.id)
+        .unwrap();
+    assert_eq!(throttled.status, DownloadStatus::Downloading);
+    assert_eq!(throttled.speed_limit, Some(100 * 1024));
+    assert!(
+        throttled.downloaded < (TOTAL as u64) / 2,
+        "limit did not throttle the running download: {} bytes",
+        throttled.downloaded
+    );
+
+    manager.set_speed_limit(&task.id, None).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let current = manager
+            .list()
+            .await
+            .into_iter()
+            .find(|item| item.id == task.id)
+            .unwrap();
+        if matches!(
+            current.status,
+            DownloadStatus::Completed | DownloadStatus::Failed | DownloadStatus::Cancelled
+        ) {
+            assert_eq!(current.status, DownloadStatus::Completed, "{:?}", current.error);
+            break;
+        }
+        assert!(Instant::now() < deadline, "download did not finish after removing the limit");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let saved = std::fs::read(dir.join("Downloads").join("big.bin")).unwrap();
+    assert_eq!(saved, *body);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn segmented_download_reports_live_part_progress() {
     let body = Arc::new(payload());
     let url = serve(body.clone());
