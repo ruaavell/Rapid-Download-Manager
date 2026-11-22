@@ -1,6 +1,6 @@
 pkgname=rdm
 pkgver=1.0.5
-pkgrel=2
+pkgrel=3
 pkgdesc="Rust-powered native Linux download manager"
 arch=('x86_64' 'aarch64')
 url="https://github.com/ruaavell/rdm"
@@ -13,7 +13,11 @@ sha256sums=('SKIP')
 build() {
   cd "$srcdir/rdm"
   npm install
-  cargo build --release -p rdm-desktop
+  # Build through the Tauri CLI: it builds the frontend and enables the
+  # custom-protocol feature. A plain `cargo build --release` leaves the binary
+  # in dev mode, so it tries to load http://localhost:1420 at startup instead
+  # of the bundled UI.
+  npm run tauri build -- --no-bundle
 }
 
 package() {
