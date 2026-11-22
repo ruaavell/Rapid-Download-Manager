@@ -1,8 +1,9 @@
+pub mod net;
 mod store;
 
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
-use reqwest::{header, Client, StatusCode};
+use reqwest::{header, header::HeaderMap, header::HeaderValue, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -51,6 +52,46 @@ pub struct NewDownload {
     pub destination: String,
     pub filename: Option<String>,
     pub speed_limit: Option<u64>,
+    /// Page the link was taken from; sent as the `Referer` header.
+    #[serde(default)]
+    pub referrer: Option<String>,
+    /// `Cookie` header value from the browser. Kept in memory only.
+    #[serde(default)]
+    pub cookies: Option<String>,
+}
+
+/// Per-task request data that must never be written to disk.
+#[derive(Debug, Clone, Default)]
+struct RequestExtras {
+    referrer: Option<String>,
+    cookies: Option<String>,
+    filename_explicit: bool,
+}
+
+/// What a one-byte range request told us about the remote file.
+#[derive(Debug, Clone, Default)]
+struct Probe {
+    total: Option<u64>,
+    accept_ranges: bool,
+    filename: Option<String>,
+    content_type: Option<String>,
+}
+
+impl Probe {
+    fn is_html(&self) -> bool {
+        self.content_type
+            .as_deref()
+            .map(net::is_html_content_type)
+            .unwrap_or(false)
+    }
+}
+
+/// Remote file details shown when the browser hands a link to RDM.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ProbeInfo {
+    pub size: Option<u64>,
+    pub content_type: Option<String>,
+    pub filename: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +106,7 @@ pub struct DownloadManager {
     store: TaskStore,
     tasks: Arc<RwLock<HashMap<String, DownloadTask>>>,
     controls: Arc<Mutex<HashMap<String, watch::Sender<Control>>>>,
+    extras: Arc<RwLock<HashMap<String, RequestExtras>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +137,7 @@ impl DownloadManager {
             store,
             tasks: Arc::new(RwLock::new(tasks)),
             controls: Arc::new(Mutex::new(HashMap::new())),
+            extras: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -107,10 +150,19 @@ impl DownloadManager {
     pub async fn add(&self, input: NewDownload) -> Result<DownloadTask> {
         validate_url(&input.url)?;
         let destination = PathBuf::from(&input.destination);
-        let filename = input
+        let explicit_name = input
             .filename
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| filename_from_url(&input.url));
+            .as_deref()
+            .map(net::sanitize_filename)
+            .filter(|s| !s.is_empty());
+        let filename_explicit = explicit_name.is_some();
+        let filename = explicit_name.unwrap_or_else(|| filename_from_url(&input.url));
+        let cookies = input
+            .cookies
+            .filter(|c| !c.is_empty() && c.len() <= 64 * 1024 && !c.contains(['\r', '\n', '\0']));
+        let referrer = input
+            .referrer
+            .filter(|r| (r.starts_with("http://") || r.starts_with("https://")) && !r.contains(['\r', '\n', '\0']));
         let destination = if destination.is_dir() {
             destination.join(&filename)
         } else {
@@ -133,6 +185,14 @@ impl DownloadManager {
             created_at: now(),
         };
         self.store.upsert(&task)?;
+        self.extras.write().await.insert(
+            id.clone(),
+            RequestExtras {
+                referrer,
+                cookies,
+                filename_explicit,
+            },
+        );
         self.tasks.write().await.insert(id, task.clone());
         Ok(task)
     }
@@ -205,6 +265,7 @@ impl DownloadManager {
         }
         self.store.delete(id)?;
         self.tasks.write().await.remove(id);
+        self.extras.write().await.remove(id);
         Ok(())
     }
 
@@ -216,16 +277,35 @@ impl DownloadManager {
         if is_youtube_url(&task.url) {
             return self.run_ytdlp(id, control).await;
         }
+
+        let headers = self.headers_for(id).await;
+        let (resolved_url, probe) = self.probe_resolved(&task.url, &headers).await;
+        if resolved_url != task.url {
+            let new_url = resolved_url.clone();
+            self.update(id, move |t| t.url = new_url).await?;
+        }
+
+        if let Some(probe) = &probe {
+            // A web page where an archive/media file was expected means the
+            // server wants a sign-in or confirmation. Saving it would produce a
+            // "corrupt" file, so fail with a clear message instead.
+            let current = self.get(id).await?;
+            if probe.is_html()
+                && (net::is_google_drive_host(&resolved_url)
+                    || net::has_non_html_extension(&current.filename))
+            {
+                bail!(
+                    "The server returned a web page instead of the file (sign-in or confirmation required). \
+                     Start the download again from the browser while signed in."
+                );
+            }
+            self.apply_server_filename(id, probe).await?;
+        }
+
+        let task = self.get(id).await?;
         let destination = PathBuf::from(&task.destination);
-        // Probe server capabilities.
-        let head = self.client.head(&task.url).send().await.ok();
-        let total = head.as_ref().and_then(|r| r.content_length());
-        let accept_ranges = head
-            .as_ref()
-            .and_then(|r| r.headers().get(reqwest::header::ACCEPT_RANGES))
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.contains("bytes"))
-            .unwrap_or(false);
+        let total = probe.as_ref().and_then(|p| p.total);
+        let accept_ranges = probe.as_ref().map(|p| p.accept_ranges).unwrap_or(false);
 
         let segments = if accept_ranges {
             let t = total.unwrap_or(0);
@@ -243,6 +323,178 @@ impl DownloadManager {
         }
         self.run_segmented(id, total.unwrap(), segments, control, destination)
             .await
+    }
+
+    /// `Referer` / `Cookie` headers for a task. These live in memory only.
+    async fn headers_for(&self, id: &str) -> HeaderMap {
+        let extras = self.extras.read().await.get(id).cloned().unwrap_or_default();
+        build_request_headers(extras.referrer.as_deref(), extras.cookies.as_deref())
+    }
+
+    /// One-byte range request: learns size, range support, name and type
+    /// without downloading the body. Returns `None` if the server is
+    /// unreachable or refuses; the download itself then reports the error.
+    async fn probe(&self, url: &str, headers: &HeaderMap) -> Option<Probe> {
+        let response = self
+            .client
+            .get(url)
+            .headers(headers.clone())
+            .header(header::RANGE, "bytes=0-0")
+            .send()
+            .await
+            .ok()?;
+        let status = response.status();
+        let h = response.headers();
+        let content_type = h
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_string());
+        let filename = h
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(net::content_disposition_filename);
+        let content_range = h
+            .get(header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let (total, accept_ranges) = match status {
+            StatusCode::PARTIAL_CONTENT => (
+                content_range
+                    .as_deref()
+                    .and_then(|v| v.rsplit('/').next())
+                    .and_then(|v| v.trim().parse::<u64>().ok()),
+                true,
+            ),
+            // Empty file: "bytes */0".
+            StatusCode::RANGE_NOT_SATISFIABLE => (
+                content_range
+                    .as_deref()
+                    .and_then(|v| v.rsplit('/').next())
+                    .and_then(|v| v.trim().parse::<u64>().ok()),
+                false,
+            ),
+            // The server ignored Range and answered with the whole body.
+            s if s.is_success() => (response.content_length(), false),
+            _ => return None,
+        };
+        Some(Probe {
+            total,
+            accept_ranges,
+            filename,
+            content_type,
+        })
+    }
+
+    /// Probe, following Google Drive's "can't scan for viruses" page to the
+    /// real download link when needed.
+    async fn probe_resolved(&self, url: &str, headers: &HeaderMap) -> (String, Option<Probe>) {
+        let mut url = url.to_string();
+        let mut probe = self.probe(&url, headers).await;
+        for _ in 0..2 {
+            let html = probe.as_ref().map(Probe::is_html).unwrap_or(false);
+            if !html || !net::is_google_drive_host(&url) {
+                break;
+            }
+            let Some(next) = self.resolve_drive_confirmation(&url, headers).await else {
+                break;
+            };
+            if next == url {
+                break;
+            }
+            url = next;
+            probe = self.probe(&url, headers).await;
+        }
+        (url, probe)
+    }
+
+    async fn resolve_drive_confirmation(&self, page_url: &str, headers: &HeaderMap) -> Option<String> {
+        let response = self
+            .client
+            .get(page_url)
+            .headers(headers.clone())
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let is_html = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(net::is_html_content_type)
+            .unwrap_or(false);
+        if !is_html {
+            return None;
+        }
+        let body = response.text().await.ok()?;
+        let found = net::google_drive_confirm_url(&body)?;
+        let next = url::Url::parse(page_url).ok()?.join(&found).ok()?;
+        Some(next.to_string())
+    }
+
+    /// Use the server's `Content-Disposition` name unless the user chose one
+    /// or a partial download already exists under the current name.
+    async fn apply_server_filename(&self, id: &str, probe: &Probe) -> Result<()> {
+        let Some(name) = probe.filename.clone() else {
+            return Ok(());
+        };
+        let explicit = self
+            .extras
+            .read()
+            .await
+            .get(id)
+            .map(|e| e.filename_explicit)
+            .unwrap_or(false);
+        if explicit {
+            return Ok(());
+        }
+        let task = self.get(id).await?;
+        if task.filename == name {
+            return Ok(());
+        }
+        let old_destination = PathBuf::from(&task.destination);
+        let part = part_path(&old_destination);
+        let mut seg0 = part.as_os_str().to_os_string();
+        seg0.push(".seg0");
+        if fs::metadata(&part).await.is_ok() || fs::metadata(PathBuf::from(seg0)).await.is_ok() {
+            return Ok(());
+        }
+        let dir = old_destination
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let new_destination = unique_path(&dir.join(&name));
+        let final_name = new_destination
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&name)
+            .to_string();
+        let final_destination = new_destination.to_string_lossy().to_string();
+        self.update(id, move |t| {
+            t.filename = final_name;
+            t.destination = final_destination;
+        })
+        .await
+    }
+
+    /// Remote details for a link handed over by the browser extension.
+    pub async fn probe_metadata(
+        &self,
+        url: &str,
+        referrer: Option<&str>,
+        cookies: Option<&str>,
+    ) -> ProbeInfo {
+        let headers = build_request_headers(referrer, cookies);
+        let (_, probe) = self.probe_resolved(url, &headers).await;
+        match probe {
+            Some(p) if !p.is_html() => ProbeInfo {
+                size: p.total,
+                content_type: p.content_type,
+                filename: p.filename,
+            },
+            _ => ProbeInfo::default(),
+        }
     }
 
     async fn run_segmented(
@@ -308,6 +560,7 @@ impl DownloadManager {
             Fallback,
         }
 
+        let request_headers = self.headers_for(id).await;
         let mut handles = Vec::new();
         for (i, start, end) in ranges {
             let seg_len = end - start + 1;
@@ -322,6 +575,7 @@ impl DownloadManager {
             let manager = self.clone();
             let downloaded = downloaded.clone();
             let mut control_rx = control_seg.clone();
+            let request_headers = request_headers.clone();
             let handle = tokio::spawn(async move {
                 // If resume_from > end, done
                 if resume_from > end {
@@ -330,6 +584,7 @@ impl DownloadManager {
                 let resp = manager
                     .client
                     .get(&url)
+                    .headers(request_headers)
                     .header(reqwest::header::RANGE, format!("bytes={}-{}", resume_from, end))
                     .send()
                     .await?;
@@ -339,6 +594,17 @@ impl DownloadManager {
                 }
                 if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                     return Err(anyhow::anyhow!("HTTP {}", resp.status()));
+                }
+                // Appending bytes from a different offset would silently corrupt the file.
+                let served_start = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.strip_prefix("bytes "))
+                    .and_then(|v| v.split_once('-'))
+                    .and_then(|(start, _)| start.trim().parse::<u64>().ok());
+                if served_start != Some(resume_from) {
+                    return Err(anyhow::anyhow!("The server returned an unexpected byte range"));
                 }
                 let mut file = tokio::fs::OpenOptions::new()
                     .create(true)
@@ -764,7 +1030,8 @@ impl DownloadManager {
             Err(_) => 0,
         };
 
-        let mut request = self.client.get(&task.url);
+        let request_headers = self.headers_for(id).await;
+        let mut request = self.client.get(&task.url).headers(request_headers.clone());
         if existing > 0 {
             request = request.header(header::RANGE, format!("bytes={existing}-"));
         }
@@ -786,10 +1053,29 @@ impl DownloadManager {
         if existing > 0 && !append {
             // Server ignored Range or representation changed. Restart safely.
             let _ = fs::remove_file(&part).await;
-            response = self.client.get(&task.url).send().await?;
+            response = self
+                .client
+                .get(&task.url)
+                .headers(request_headers.clone())
+                .send()
+                .await?;
         }
         if !response.status().is_success() {
             bail!("HTTP {}", response.status());
+        }
+        let served_html = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(net::is_html_content_type)
+            .unwrap_or(false);
+        if served_html
+            && (net::is_google_drive_host(&task.url) || net::has_non_html_extension(&task.filename))
+        {
+            bail!(
+                "The server returned a web page instead of the file (sign-in or confirmation required). \
+                 Start the download again from the browser while signed in."
+            );
         }
 
         let content_length = response.content_length();
@@ -799,12 +1085,25 @@ impl DownloadManager {
             content_length
         };
         if total.is_none() {
-            if let Ok(head) = self.client.head(&task.url).send().await {
+            if let Ok(head) = self
+                .client
+                .head(&task.url)
+                .headers(request_headers.clone())
+                .send()
+                .await
+            {
                 total = head.content_length();
             }
         }
         if total.is_none() {
-            if let Ok(r) = self.client.get(&task.url).header(reqwest::header::RANGE, "bytes=0-0").send().await {
+            if let Ok(r) = self
+                .client
+                .get(&task.url)
+                .headers(request_headers.clone())
+                .header(reqwest::header::RANGE, "bytes=0-0")
+                .send()
+                .await
+            {
                 if let Some(cr) = r.headers().get(reqwest::header::CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
                     if let Some(t) = cr.rsplit('/').next().and_then(|s| s.trim().parse::<u64>().ok()) {
                         if t > 0 { total = Some(t); }
@@ -944,15 +1243,46 @@ fn validate_url(value: &str) -> Result<()> {
 }
 
 fn filename_from_url(value: &str) -> String {
-    url::Url::parse(value)
-        .ok()
-        .and_then(|u| {
-            u.path_segments()
-                .and_then(|mut s| s.next_back())
-                .map(str::to_owned)
-        })
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "download.bin".to_string())
+    net::filename_from_url(value)
+}
+
+fn build_request_headers(referrer: Option<&str>, cookies: Option<&str>) -> HeaderMap {
+    let mut map = HeaderMap::new();
+    if let Some(value) = referrer.and_then(|r| HeaderValue::from_str(r).ok()) {
+        map.insert(header::REFERER, value);
+    }
+    if let Some(mut value) = cookies
+        .filter(|c| !c.contains(['\r', '\n', '\0']))
+        .and_then(|c| HeaderValue::from_str(c).ok())
+    {
+        value.set_sensitive(true);
+        map.insert(header::COOKIE, value);
+    }
+    map
+}
+
+/// `name`, or `name (1).ext`, `name (2).ext`... if it already exists.
+fn unique_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download");
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    for n in 1..10_000 {
+        let candidate = dir.join(format!("{stem} ({n}){ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path.to_path_buf()
 }
 
 fn part_path(destination: &Path) -> PathBuf {

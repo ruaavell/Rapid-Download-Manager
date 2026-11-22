@@ -92,21 +92,31 @@ fn handle_message(buf: &[u8], storage: &Option<Storage>, paths: &rdm_common::Rdm
     }
     // Append to the legacy JSONL inbox so the desktop UI (which reads
     // browser-inbox.jsonl) can import the download.
+    //
+    // The file name the browser resolved and the cookies for this link are
+    // forwarded too; without them servers such as Google Drive answer with a
+    // web page and the file ends up misnamed and corrupt. Cookies only ever
+    // live in this owner-only file, which the desktop app deletes once read.
     let record = serde_json::json!({
         "url": url,
         "referrer": parsed.referrer,
+        "filename": parsed.filename,
+        "cookies": parsed.cookies,
     });
     if let Some(parent) = paths.inbox.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&paths.inbox)
-        .and_then(|mut f| {
-            use std::io::Write;
-            writeln!(f, "{}", record)
-        });
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let _ = options.open(&paths.inbox).and_then(|mut f| {
+        use std::io::Write;
+        writeln!(f, "{}", record)
+    });
 
     // Also register in SQLite browser inbox when storage is available.
     let storage = match storage {
@@ -120,12 +130,13 @@ fn handle_message(buf: &[u8], storage: &Option<Storage>, paths: &rdm_common::Rdm
         }
     };
     let headers = parsed.headers.unwrap_or_default();
+    // Cookies are deliberately not copied into the SQLite inbox.
     match storage.add_browser_entry(
         &url,
         parsed.referrer.as_deref(),
         parsed.filename.as_deref(),
         &headers,
-        parsed.cookies.as_deref(),
+        None,
     ) {
         Ok(id) => OutgoingMessage {
             ok: true,
