@@ -1255,10 +1255,10 @@ impl DownloadManager {
             // media (Reddit, X, ...) can be extracted the same way the browser
             // would load it.
             if let Some(referer) = extras.referrer.as_deref() {
-                args.extend(["--referer".into(), referer.to_string()]);
+                args.extend(["--add-headers".into(), format!("Referer: {referer}")]);
             }
             if let Some(cookies) = extras.cookies.as_deref() {
-                args.extend(["--add-header".into(), format!("Cookie: {cookies}")]);
+                args.extend(["--add-headers".into(), format!("Cookie: {cookies}")]);
             }
             args.push(source);
 

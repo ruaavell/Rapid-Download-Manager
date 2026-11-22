@@ -48,8 +48,22 @@ function attachRdmButton(video) {
   btn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
+    // On feeds/timelines the page URL is not the post URL. Resolve the
+    // permalink of the post that contains this video so yt-dlp can find it.
+    let pageUrl = location.href;
+    try {
+      const host = location.hostname || "";
+      let selector = null;
+      if (host.includes("x.com") || host.includes("twitter.com")) selector = 'a[href*="/status/"]';
+      else if (host.includes("reddit.com")) selector = 'a[href*="/comments/"]';
+      if (selector) {
+        const root = video.closest("article, shreddit-post, [data-testid='post-container']") || document;
+        const link = root.querySelector(selector);
+        if (link && link.href) pageUrl = link.href;
+      }
+    } catch (e) {}
     const url = video.currentSrc || video.src;
-    const target = (url && !url.startsWith("blob:")) ? url : location.href;
+    const target = (url && !url.startsWith("blob:")) ? url : pageUrl;
     // A direct MP4/WebM is already a file: send it through the normal HTTP
     // downloader instead of asking yt-dlp for a format selection.
     const directFile = /\.(mp4|webm|mkv|mov|m4v|mp3|m4a|flac|wav|ogg)(\?|#|$)/i.test(target);

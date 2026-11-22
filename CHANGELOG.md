@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.8] - 2026-11-22
+
+### Fixed
+- yt-dlp requests now use canonical headers for cookies and referer.
+- Browser video button resolves the post permalink on X/Twitter and Reddit feeds.
+
 ## [1.0.7] - 2026-11-22
 
 ### Added
