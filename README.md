@@ -207,7 +207,7 @@ If the automatic registration did not work, install the pre-built CRX manually:
 7. Confirm the **RDM Browser Integration** extension (id `ddnikbhjakonmonnfeannoihpnpbcojf`) is enabled.
 8. <img width="1914" height="998" alt="chrome-4" src="https://github.com/user-attachments/assets/bd5c2924-e893-4abc-b8db-9526e5cd7d2e" />
 
-
+ https://addons.mozilla.org/en-US/firefox/addon/rdm-browser-integration/
 
 Alternatively, load the unpacked source for development:
 
