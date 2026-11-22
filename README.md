@@ -198,9 +198,16 @@ After the first run, restart your browser and open `chrome://extensions` (Chromi
 If the automatic registration did not work, install the pre-built CRX manually:
 
 1. Open `chrome://extensions`.
-2. Enable **Developer mode** (top right).
-3. Drag and drop `browser-extension.crx` from the repository root onto the page, or use **Load unpacked** and select the `browser-extension/` directory.
-4. Confirm the **RDM Browser Integration** extension (id `ddnikbhjakonmonnfeannoihpnpbcojf`) is enabled.
+2. <img width="1914" height="998" alt="chrome-1" src="https://github.com/user-attachments/assets/9592dded-0e20-4a28-9c54-4dfdd167be09" />
+3. Enable **Developer mode** (top right).
+4. <img width="1914" height="998" alt="chrome-2" src="https://github.com/user-attachments/assets/24660ec0-d76a-4bcd-963a-7469fa68312f" />
+5. Drag and drop `browser-extension.crx` from the repository root onto the page, or use **Load unpacked** and select the `browser-extension/` directory.
+6. <img width="1914" height="998" alt="chrome-3" src="https://github.com/user-attachments/assets/f5552872-9fad-41a1-9bc2-94ebd8a98ff3" />
+
+7. Confirm the **RDM Browser Integration** extension (id `ddnikbhjakonmonnfeannoihpnpbcojf`) is enabled.
+8. <img width="1914" height="998" alt="chrome-4" src="https://github.com/user-attachments/assets/bd5c2924-e893-4abc-b8db-9526e5cd7d2e" />
+
+
 
 Alternatively, load the unpacked source for development:
 
