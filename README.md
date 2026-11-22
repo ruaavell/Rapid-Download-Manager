@@ -21,6 +21,7 @@
 ---
 
 ## 🚀 Overview
+<img width="1172" height="809" alt="Ekran Görüntüsü 2026-11-22 18-10-24" src="https://github.com/user-attachments/assets/b21bd668-8a79-497d-aa11-108ac9e70c44" />
 
 **RDM (Rapid Download Manager)** is an open-source, Linux-native download manager written in Rust.
 
