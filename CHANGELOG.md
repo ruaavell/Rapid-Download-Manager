@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.11] - 2026-11-22
+
+### Fixed
+- Reddit video players (shreddit-player) now get a Download button.
+- Instagram button is attached to the player container and stays clickable above the overlay.
+
 ## [1.0.10] - 2026-11-22
 
 ### Changed
