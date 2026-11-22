@@ -7,7 +7,7 @@ import {
   RefreshCw, Settings, Trash2, Video, X, Zap
 } from "lucide-react";
 
-type Status = "queued" | "downloading" | "paused" | "merging" | "completed" | "failed" | "cancelled";
+type Status = "queued" | "downloading" | "paused" | "merging" | "verifying" | "completed" | "failed" | "cancelled";
 type Segment = {
   index: number; start: number; end: number;
   downloaded: number; total: number; complete: boolean;
@@ -125,7 +125,7 @@ export default function App() {
   }, [menu]);
 
   const activeTasks = useMemo(
-    () => tasks.filter(t => ["downloading", "merging", "paused", "queued"].includes(t.status)),
+    () => tasks.filter(t => ["downloading", "merging", "verifying", "paused", "queued"].includes(t.status)),
     [tasks]
   );
   const totalSpeed = activeTasks.reduce((sum, task) => sum + task.speed, 0);
@@ -134,7 +134,7 @@ export default function App() {
 
   const visible = useMemo(() => tasks.filter(t => {
     if (filter === "all") return true;
-    if (filter === "active") return t.status === "downloading" || t.status === "merging" || t.status === "queued";
+    if (filter === "active") return t.status === "downloading" || t.status === "merging" || t.status === "verifying" || t.status === "queued";
     if (filter === "completed") return t.status === "completed";
     if (filter === "paused") return t.status === "paused";
     if (CATEGORY_LABEL[filter]) return categoryOf(t.filename) === filter;
@@ -241,7 +241,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="side-heading">DOWNLOADS</div>
         <SideItem icon={<HardDriveDownload/>} label="All downloads" count={tasks.length} active={filter==="all"} onClick={()=>setFilter("all")}/>
-        <SideItem icon={<ArrowDownToLine/>} label="Active" count={tasks.filter(t=>t.status==="downloading"||t.status==="merging"||t.status==="queued").length} active={filter==="active"} onClick={()=>setFilter("active")}/>
+        <SideItem icon={<ArrowDownToLine/>} label="Active" count={tasks.filter(t=>t.status==="downloading"||t.status==="merging"||t.status==="verifying"||t.status==="queued").length} active={filter==="active"} onClick={()=>setFilter("active")}/>
         <SideItem icon={<CirclePause/>} label="Paused" count={tasks.filter(t=>t.status==="paused").length} active={filter==="paused"} onClick={()=>setFilter("paused")}/>
         <SideItem icon={<CheckCircle2/>} label="Completed" count={tasks.filter(t=>t.status==="completed").length} active={filter==="completed"} onClick={()=>setFilter("completed")}/>
         <div className="side-heading categories">CATEGORIES</div>
@@ -280,7 +280,7 @@ export default function App() {
           </div>
           {dockOpen && <div className="transfer-dock-list">
             {activeTasks.map(task => <div className="transfer-row" key={task.id} onContextMenu={e => openMenu(e, task)}>
-              <div className="transfer-name"><b title={task.filename}>{task.filename}</b><small>{task.status === "merging" ? "Merging parts" : `${fmtBytes(task.speed)}/s`}</small></div>
+              <div className="transfer-name"><b title={task.filename}>{task.filename}</b><small>{task.status === "merging" ? "Merging parts" : task.status === "verifying" ? "Verifying file" : `${fmtBytes(task.speed)}/s`}</small></div>
               <div className="transfer-rate"><b>{task.total ? `${pct(task).toFixed(1)}%` : fmtBytes(task.downloaded)}</b><small>{fmtBytes(task.downloaded)}{task.total ? ` / ${fmtBytes(task.total)}` : ""}</small></div>
               <div className="transfer-parts">
                 <div className="segment-strip">
@@ -370,6 +370,6 @@ function SideItem({icon,label,count,active,onClick}:{icon:React.ReactNode;label:
   return <button className={`side-item ${active?"active":""}`} onClick={onClick}>{icon}<span>{label}</span>{count!==undefined&&<small>{count}</small>}</button>;
 }
 function StatusPill({status}:{status:Status}) {
-  const labels:Record<Status,string>={queued:"Queued",downloading:"Downloading",paused:"Paused",merging:"Merging",completed:"Completed",failed:"Failed",cancelled:"Cancelled"};
+  const labels:Record<Status,string>={queued:"Queued",downloading:"Downloading",paused:"Paused",merging:"Merging",verifying:"Verifying",completed:"Completed",failed:"Failed",cancelled:"Cancelled"};
   return <span className={`status-pill ${status}`}><i/>{labels[status]}</span>;
 }

@@ -629,7 +629,7 @@ fn main() {
                     let state = handle.state::<AppState>();
                     let _ = import_browser_inbox_inner(state.inner()).await;
                     let pending_count = state.pending.lock().await.len();
-                    let active_count = state.manager.list().await.iter().filter(|t| matches!(t.status, DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Paused | DownloadStatus::Merging)).count();
+                    let active_count = state.manager.list().await.iter().filter(|t| matches!(t.status, DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Paused | DownloadStatus::Merging | DownloadStatus::Verifying)).count();
                     // The confirmation dialog lives in the main window, so bring it
                     // forward when a browser download is waiting.
                     if pending_count > prev_pending {

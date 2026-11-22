@@ -26,6 +26,7 @@ pub enum DownloadStatus {
     Queued,
     Downloading,
     Paused,
+    Verifying,
     Completed,
     Failed,
     Cancelled,
@@ -192,7 +193,10 @@ impl DownloadManager {
         let recovered = store.list()?;
         let mut tasks = HashMap::new();
         for mut task in recovered {
-            if task.status == DownloadStatus::Downloading {
+            if matches!(
+                task.status,
+                DownloadStatus::Downloading | DownloadStatus::Merging | DownloadStatus::Verifying
+            ) {
                 task.status = DownloadStatus::Paused;
                 store.upsert(&task)?;
             }
@@ -241,15 +245,9 @@ impl DownloadManager {
         if fs::metadata(seg_path(&part, 0)).await.is_err() {
             return Vec::new();
         }
-        let base = total / segments as u64;
         let mut progress = Vec::with_capacity(segments);
         for index in 0..segments {
-            let start = index as u64 * base;
-            let end = if index == segments - 1 {
-                total - 1
-            } else {
-                (index as u64 + 1) * base - 1
-            };
+            let (start, end) = segment_bounds(total, segments, index);
             let len = end - start + 1;
             let downloaded = fs::metadata(seg_path(&part, index))
                 .await
@@ -655,15 +653,9 @@ impl DownloadManager {
         };
 
         let gate = self.gate_for(id).await;
-        let base = total / segments as u64;
         let mut ranges: Vec<(usize, u64, u64)> = Vec::new();
         for i in 0..segments {
-            let start = i as u64 * base;
-            let end = if i == segments - 1 {
-                total - 1
-            } else {
-                (i as u64 + 1) * base - 1
-            };
+            let (start, end) = segment_bounds(total, segments, i);
             ranges.push((i, start, end));
         }
 
@@ -863,6 +855,25 @@ impl DownloadManager {
             return Err(e);
         }
 
+        // Verify every part on disk before combining them. A short part is kept
+        // so the user can resume instead of losing all completed parts.
+        self.update(id, |t| t.status = DownloadStatus::Verifying)
+            .await?;
+        for i in 0..segments {
+            let (start, end) = segment_bounds(total, segments, i);
+            let expected = end - start + 1;
+            let actual = tokio::fs::metadata(seg_path(i))
+                .await
+                .map(|meta| meta.len())
+                .unwrap_or(0);
+            if actual != expected {
+                bail!(
+                    "Part {} verification failed: expected {expected} bytes, found {actual}. Resume the download to retry.",
+                    i + 1
+                );
+            }
+        }
+
         self.update(id, |t| t.status = DownloadStatus::Merging).await.ok();
         // merge segments into destination
         let mut out = tokio::fs::File::create(&destination).await?;
@@ -872,22 +883,22 @@ impl DownloadManager {
         }
         out.flush().await?;
         drop(out);
-        // Verify merged file size (IDM-like final check).
+        // Final size check on the merged file. Keep the parts on failure so a
+        // retry can merge them again without re-downloading.
+        self.update(id, |t| t.status = DownloadStatus::Verifying)
+            .await?;
         match tokio::fs::metadata(&destination).await {
             Ok(meta) => {
                 if meta.len() != total {
                     let _ = tokio::fs::remove_file(&destination).await;
-                    for i in 0..segments {
-                        let _ = tokio::fs::remove_file(seg_path(i)).await;
-                    }
-                    return Err(anyhow!("Incomplete merge: expected {total} bytes, got {}", meta.len()));
+                    bail!(
+                        "Merged file verification failed: expected {total} bytes, found {}. Resume the download to retry.",
+                        meta.len()
+                    );
                 }
             }
             Err(e) => {
                 let _ = tokio::fs::remove_file(&destination).await;
-                for i in 0..segments {
-                    let _ = tokio::fs::remove_file(seg_path(i)).await;
-                }
                 return Err(e.into());
             }
         }
@@ -1325,6 +1336,12 @@ impl DownloadManager {
         file.flush().await?;
         drop(file);
 
+        let part_len = fs::metadata(&part).await?.len();
+        if part_len != downloaded {
+            bail!(
+                "File verification failed: expected {downloaded} bytes on disk, found {part_len}. Resume the download to retry."
+            );
+        }
         if let Some(expected) = total {
             if downloaded != expected {
                 let _ = fs::remove_file(&part).await;
@@ -1337,8 +1354,19 @@ impl DownloadManager {
         self.update(id, |t| {
             t.downloaded = downloaded;
             t.total = Some(downloaded);
-            t.status = DownloadStatus::Completed;
+            t.status = DownloadStatus::Verifying;
             t.error = None;
+        })
+        .await?;
+        let final_len = fs::metadata(&destination).await?.len();
+        if final_len != downloaded {
+            let _ = fs::remove_file(&destination).await;
+            bail!(
+                "File verification failed: expected {downloaded} bytes, found {final_len}."
+            );
+        }
+        self.update(id, |t| {
+            t.status = DownloadStatus::Completed;
         })
         .await?;
         Ok(())
@@ -1438,6 +1466,18 @@ fn segment_count(total: u64) -> usize {
     } else {
         1
     }
+}
+
+/// Inclusive byte range of one segment.
+fn segment_bounds(total: u64, segments: usize, index: usize) -> (u64, u64) {
+    let base = total / segments as u64;
+    let start = index as u64 * base;
+    let end = if index == segments - 1 {
+        total - 1
+    } else {
+        (index as u64 + 1) * base - 1
+    };
+    (start, end)
 }
 
 fn now() -> i64 {

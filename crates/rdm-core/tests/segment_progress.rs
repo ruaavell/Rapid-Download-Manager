@@ -10,7 +10,7 @@ fn payload() -> Vec<u8> {
     (0..TOTAL).map(|i| (i % 251) as u8).collect()
 }
 
-fn handle(mut stream: TcpStream, body: Arc<Vec<u8>>) {
+fn handle(mut stream: TcpStream, body: Arc<Vec<u8>>, truncate: bool) {
     let mut request = Vec::new();
     let mut buffer = [0u8; 4096];
     while !request.windows(4).any(|window| window == b"\r\n\r\n") {
@@ -40,7 +40,11 @@ fn handle(mut stream: TcpStream, body: Arc<Vec<u8>>) {
     if start > end {
         return;
     }
-    let slice = &body[start..=end];
+    let mut slice = &body[start..=end];
+    if truncate && start == TOTAL / 4 {
+        // Pretend the transfer ended cleanly while sending only half of part 2.
+        slice = &slice[..slice.len() / 2];
+    }
     let head = if range.is_some() {
         format!(
             "HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\n\
@@ -71,12 +75,20 @@ fn handle(mut stream: TcpStream, body: Arc<Vec<u8>>) {
 }
 
 fn serve(body: Arc<Vec<u8>>) -> String {
+    serve_with(body, false)
+}
+
+fn serve_truncating(body: Arc<Vec<u8>>) -> String {
+    serve_with(body, true)
+}
+
+fn serve_with(body: Arc<Vec<u8>>, truncate: bool) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let body = body.clone();
-            std::thread::spawn(move || handle(stream, body));
+            std::thread::spawn(move || handle(stream, body, truncate));
         }
     });
     format!("http://{addr}/big.bin")
@@ -144,6 +156,64 @@ async fn speed_limit_can_be_applied_and_removed_while_running() {
     }
     let saved = std::fs::read(dir.join("Downloads").join("big.bin")).unwrap();
     assert_eq!(saved, *body);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn short_part_fails_verification_and_keeps_parts_for_resume() {
+    let body = Arc::new(payload());
+    let url = serve_truncating(body);
+    let dir = std::env::temp_dir().join(format!("rdm-verify-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Downloads")).unwrap();
+    let manager = DownloadManager::new(TaskStore::open(dir.join("db.sqlite3")).unwrap()).unwrap();
+
+    let task = manager
+        .add(NewDownload {
+            url,
+            destination: dir.join("Downloads").to_string_lossy().to_string(),
+            filename: None,
+            speed_limit: None,
+            referrer: None,
+            cookies: None,
+        })
+        .await
+        .unwrap();
+    manager.start(&task.id).await.unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let finished = loop {
+        let current = manager
+            .list()
+            .await
+            .into_iter()
+            .find(|item| item.id == task.id)
+            .unwrap();
+        if matches!(
+            current.status,
+            DownloadStatus::Completed | DownloadStatus::Failed | DownloadStatus::Cancelled
+        ) {
+            break current;
+        }
+        assert!(Instant::now() < deadline, "download did not finish in time");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    assert_eq!(finished.status, DownloadStatus::Failed);
+    assert!(
+        finished
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Part 2 verification failed"),
+        "unexpected error: {:?}",
+        finished.error
+    );
+    assert!(!dir.join("Downloads").join("big.bin").exists());
+    assert!(
+        dir.join("Downloads").join("big.bin.rdm.part.seg1").exists(),
+        "completed parts should be kept for a resume"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
