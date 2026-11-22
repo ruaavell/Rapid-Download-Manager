@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.14] - 2026-11-22
+
+### Fixed
+- X/Twitter age-restricted videos now use the authenticated GraphQL endpoint with browser cookies; syndication is only a fallback.
+- Reddit authentication errors are addressed by forwarding browser cookies (log in to Reddit in the browser first).
+
 ## [1.0.13] - 2026-11-22
 
 ### Fixed
