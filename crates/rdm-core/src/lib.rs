@@ -683,6 +683,14 @@ impl DownloadManager {
             }
         }
         let downloaded_init: u64 = existing_sizes.iter().sum();
+        // The probe result is not persisted by `run_download`; record it here so
+        // the UI can show the total and per-part progress while parts arrive.
+        self.update(id, |task| {
+            task.total = Some(total);
+            task.downloaded = downloaded_init;
+            task.status = DownloadStatus::Downloading;
+        })
+        .await?;
         let downloaded = Arc::new(AtomicU64::new(downloaded_init));
 
         // control is shared; clone for segments
