@@ -1,18 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import {
-  Archive, ArrowDownToLine, CheckCircle2, CirclePause, Clock3, File,
-  FileText, Film, FolderOpen, Gauge, HardDriveDownload, Music, Pause,
-  Play, Plus, RefreshCw, Settings, Trash2, Video, X, Zap
+  Archive, ArrowDownToLine, CheckCircle2, ChevronDown, ChevronUp, CirclePause,
+  File, FileText, Gauge, HardDriveDownload, Layers, Music, Pause, Play, Plus,
+  RefreshCw, Settings, Trash2, Video, X, Zap
 } from "lucide-react";
 
-type Status = "queued" | "downloading" | "paused" | "completed" | "failed" | "cancelled";
+type Status = "queued" | "downloading" | "paused" | "merging" | "completed" | "failed" | "cancelled";
+type Segment = {
+  index: number; start: number; end: number;
+  downloaded: number; total: number; complete: boolean;
+};
 type Task = {
   id: string; url: string; filename: string; destination: string;
   downloaded: number; total: number | null; status: Status;
   speed_limit: number | null; error: string | null; created_at: number;
+  segments: Segment[]; speed: number;
 };
+type RowMenu = { task: Task; x: number; y: number };
 type Pending = {
   id: string; url: string; referrer: string | null;
   filename: string; size: number | null; content_type: string | null;
@@ -56,11 +62,31 @@ export default function App() {
   const [pending, setPending] = useState<Pending[]>([]);
   const [pendingName, setPendingName] = useState("");
   const [pendingDest, setPendingDest] = useState("");
+  const [menu, setMenu] = useState<RowMenu | null>(null);
+  const [speedTask, setSpeedTask] = useState<Task | null>(null);
+  const [speedValue, setSpeedValue] = useState("");
+  const [dockOpen, setDockOpen] = useState(true);
+  const samples = useRef(new Map<string, { bytes: number; time: number }>());
   const currentPending = pending[0];
 
   async function refresh() {
     try {
-      setTasks(await invoke<Task[]>("list_downloads"));
+      const list = await invoke<Task[]>("list_downloads");
+      const now = performance.now();
+      const nextSamples = new Map<string, { bytes: number; time: number }>();
+      // Speed is measured from the byte delta between polls, so the engine does
+      // not need to keep a second speed value for the UI.
+      const enriched = list.map((task) => {
+        const previous = samples.current.get(task.id);
+        let speed = 0;
+        if (previous && now > previous.time) {
+          speed = Math.max(0, (task.downloaded - previous.bytes) * 1000 / (now - previous.time));
+        }
+        nextSamples.set(task.id, { bytes: task.downloaded, time: now });
+        return { ...task, segments: task.segments || [], speed };
+      });
+      samples.current = nextSamples;
+      setTasks(enriched);
     } catch (e) { setError(String(e)); }
     // Links sent from the browser extension wait here until confirmed.
     try {
@@ -82,9 +108,33 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setMenu(null); };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [menu]);
+
+  const activeTasks = useMemo(
+    () => tasks.filter(t => ["downloading", "merging", "paused", "queued"].includes(t.status)),
+    [tasks]
+  );
+  const totalSpeed = activeTasks.reduce((sum, task) => sum + task.speed, 0);
+  const allSegments = activeTasks.flatMap(task => task.segments);
+  const completedSegments = allSegments.filter(segment => segment.complete).length;
+
   const visible = useMemo(() => tasks.filter(t => {
     if (filter === "all") return true;
-    if (filter === "active") return t.status === "downloading" || t.status === "queued";
+    if (filter === "active") return t.status === "downloading" || t.status === "merging" || t.status === "queued";
     if (filter === "completed") return t.status === "completed";
     if (filter === "paused") return t.status === "paused";
     if (CATEGORY_LABEL[filter]) return categoryOf(t.filename) === filter;
@@ -136,8 +186,36 @@ export default function App() {
   }
 
   async function action(name: string, id: string, extra: object = {}) {
+    setMenu(null);
     try { await invoke(name, { id, ...extra }); await refresh(); }
     catch (e) { setError(String(e)); }
+  }
+
+  function openMenu(event: React.MouseEvent, task: Task) {
+    event.preventDefault();
+    const width = 220;
+    const height = 215;
+    setMenu({
+      task,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
+    });
+  }
+
+  function openSpeedLimit(task: Task) {
+    setMenu(null);
+    setSpeedTask(task);
+    setSpeedValue(task.speed_limit ? String(Math.round(task.speed_limit / 1024)) : "");
+  }
+
+  async function applySpeedLimit(kilobytes: number | null) {
+    if (!speedTask) return;
+    const bytes = kilobytes && kilobytes > 0 ? Math.round(kilobytes * 1024) : null;
+    try {
+      await invoke("set_speed_limit", { id: speedTask.id, speedLimit: bytes });
+      setSpeedTask(null);
+      await refresh();
+    } catch (e) { setError(String(e)); }
   }
 
   return <div className="app-shell">
@@ -163,7 +241,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="side-heading">DOWNLOADS</div>
         <SideItem icon={<HardDriveDownload/>} label="All downloads" count={tasks.length} active={filter==="all"} onClick={()=>setFilter("all")}/>
-        <SideItem icon={<ArrowDownToLine/>} label="Active" count={tasks.filter(t=>t.status==="downloading"||t.status==="queued").length} active={filter==="active"} onClick={()=>setFilter("active")}/>
+        <SideItem icon={<ArrowDownToLine/>} label="Active" count={tasks.filter(t=>t.status==="downloading"||t.status==="merging"||t.status==="queued").length} active={filter==="active"} onClick={()=>setFilter("active")}/>
         <SideItem icon={<CirclePause/>} label="Paused" count={tasks.filter(t=>t.status==="paused").length} active={filter==="paused"} onClick={()=>setFilter("paused")}/>
         <SideItem icon={<CheckCircle2/>} label="Completed" count={tasks.filter(t=>t.status==="completed").length} active={filter==="completed"} onClick={()=>setFilter("completed")}/>
         <div className="side-heading categories">CATEGORIES</div>
@@ -182,7 +260,7 @@ export default function App() {
         <div className="table-head"><span>FILE NAME</span><span>SIZE / PROGRESS</span><span>STATUS</span><span>ACTIONS</span></div>
         <div className="task-list">
           {visible.length === 0 && <div className="empty"><div className="empty-icon"><ArrowDownToLine size={30}/></div><h3>No downloads here</h3><p>Add a URL to start your first download.</p><button className="add-button" onClick={()=>setModal(true)}><Plus size={16}/> Add URL</button></div>}
-          {visible.map(task => <div className="task-row" key={task.id}>
+          {visible.map(task => <div className="task-row" key={task.id} onContextMenu={e => openMenu(e, task)}>
             <div className="file-cell"><div className="file-icon"><File size={20}/></div><div className="file-meta"><b title={task.filename}>{task.filename}</b><small title={task.url}>{task.url}</small><div className="progress-track"><div className={`progress-fill ${task.status}`} style={{width:`${pct(task)}%`}}/></div></div></div>
             <div className="size-cell"><b>{fmtBytes(task.downloaded)}{task.total ? ` / ${fmtBytes(task.total)}` : ""}</b><small>{task.total ? `${pct(task).toFixed(1)}%` : "Size unknown"}</small></div>
             <div><StatusPill status={task.status}/>{task.error && <small className="task-error" title={task.error}>{task.error}</small>}</div>
@@ -194,7 +272,40 @@ export default function App() {
             </div>
           </div>)}
         </div>
-        <footer className="statusbar"><span><span className="live-dot"/> Engine ready</span><span>{tasks.length} tasks</span><span>{tasks.filter(t=>t.status==="downloading").length} active</span><span>RDM {appVersion || "1.0.5"}</span></footer>
+
+        {activeTasks.length > 0 && <section className={`transfer-dock ${dockOpen ? "" : "collapsed"}`}>
+          <div className="transfer-dock-head">
+            <div><Layers size={14}/><b>Transfers</b><span>{activeTasks.length} active · {fmtBytes(totalSpeed)}/s</span></div>
+            <button className="icon-button" title={dockOpen ? "Hide transfers" : "Show transfers"} onClick={()=>setDockOpen(v=>!v)}>{dockOpen ? <ChevronDown size={15}/> : <ChevronUp size={15}/>}</button>
+          </div>
+          {dockOpen && <div className="transfer-dock-list">
+            {activeTasks.map(task => <div className="transfer-row" key={task.id} onContextMenu={e => openMenu(e, task)}>
+              <div className="transfer-name"><b title={task.filename}>{task.filename}</b><small>{task.status === "merging" ? "Merging parts" : `${fmtBytes(task.speed)}/s`}</small></div>
+              <div className="transfer-rate"><b>{task.total ? `${pct(task).toFixed(1)}%` : fmtBytes(task.downloaded)}</b><small>{fmtBytes(task.downloaded)}{task.total ? ` / ${fmtBytes(task.total)}` : ""}</small></div>
+              <div className="transfer-parts">
+                <div className="segment-strip">
+                  {task.segments.length > 0 ? task.segments.map(segment => <div
+                    key={segment.index}
+                    className={`segment ${segment.complete ? "complete" : task.status === "downloading" ? "active" : "pending"}`}
+                    style={{ flexGrow: Math.max(1, segment.total) }}
+                    title={`Part ${segment.index + 1}: ${fmtBytes(segment.downloaded)} / ${fmtBytes(segment.total)}`}
+                  ><span style={{ width: `${segment.total > 0 ? segment.downloaded / segment.total * 100 : 0}%` }}/></div>)
+                    : <div className={`segment single ${task.status}`} title={`${fmtBytes(task.downloaded)} downloaded`}><span style={{ width: `${pct(task)}%` }}/></div>}
+                </div>
+                <small>{task.segments.length > 0 ? `${task.segments.filter(segment => segment.complete).length}/${task.segments.length} parts` : task.total && task.total > 2 * 1024 * 1024 && task.status === "downloading" ? "preparing parts" : "single stream"}</small>
+              </div>
+            </div>)}
+          </div>}
+        </section>}
+
+        <footer className="statusbar">
+          <span><span className={`live-dot ${activeTasks.length ? "busy" : ""}`}/> {activeTasks.length ? "Transferring" : "Engine ready"}</span>
+          <span>{fmtBytes(totalSpeed)}/s</span>
+          {allSegments.length > 0 && <span>{completedSegments}/{allSegments.length} parts</span>}
+          <span>{tasks.length} tasks</span>
+          <span>{activeTasks.length} active</span>
+          <span>RDM {appVersion || "1.0.5"}</span>
+        </footer>
       </main>
     </div>
 
@@ -232,6 +343,26 @@ export default function App() {
       </div>
     </div>}
 
+    {menu && <div className="context-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={e=>e.stopPropagation()} onContextMenu={e=>e.preventDefault()}>
+      <button disabled={menu.task.status !== "downloading" && menu.task.status !== "merging"} onClick={()=>action("pause_download", menu.task.id)}><Pause size={15}/> Pause</button>
+      <button disabled={!["paused", "failed", "queued"].includes(menu.task.status)} onClick={()=>action("resume_download", menu.task.id)}><Play size={15}/> Resume</button>
+      <button className="danger" disabled={menu.task.status === "completed" || menu.task.status === "cancelled"} onClick={()=>action("cancel_download", menu.task.id)}><X size={15}/> Cancel</button>
+      <div className="menu-sep"/>
+      <button disabled={menu.task.status === "completed" || menu.task.status === "cancelled"} onClick={()=>openSpeedLimit(menu.task)}><Gauge size={15}/> Speed limit…{menu.task.speed_limit ? <small>{Math.round(menu.task.speed_limit / 1024)} KB/s</small> : null}</button>
+    </div>}
+
+    {speedTask && <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setSpeedTask(null);}}>
+      <div className="modal">
+        <div className="modal-title"><div><h2>Speed limit</h2><p>{speedTask.filename}</p></div><button type="button" className="icon-button" onClick={()=>setSpeedTask(null)}><X/></button></div>
+        <label>Limit (KB/s)<input autoFocus type="number" min="1" value={speedValue} onChange={e=>setSpeedValue(e.target.value)} placeholder="Unlimited"/><small>Applies immediately to the running download.</small></label>
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={()=>applySpeedLimit(null)}>Remove limit</button>
+          <button type="button" className="secondary-button" onClick={()=>setSpeedTask(null)}>Cancel</button>
+          <button type="button" className="add-button" disabled={!speedValue || Number(speedValue) <= 0} onClick={()=>applySpeedLimit(Number(speedValue))}>Apply</button>
+        </div>
+      </div>
+    </div>}
+
   </div>;
 }
 
@@ -239,6 +370,6 @@ function SideItem({icon,label,count,active,onClick}:{icon:React.ReactNode;label:
   return <button className={`side-item ${active?"active":""}`} onClick={onClick}>{icon}<span>{label}</span>{count!==undefined&&<small>{count}</small>}</button>;
 }
 function StatusPill({status}:{status:Status}) {
-  const labels:Record<Status,string>={queued:"Queued",downloading:"Downloading",paused:"Paused",completed:"Completed",failed:"Failed",cancelled:"Cancelled"};
+  const labels:Record<Status,string>={queued:"Queued",downloading:"Downloading",paused:"Paused",merging:"Merging",completed:"Completed",failed:"Failed",cancelled:"Cancelled"};
   return <span className={`status-pill ${status}`}><i/>{labels[status]}</span>;
 }

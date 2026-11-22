@@ -13,6 +13,7 @@ fn main() {
                 "list_downloads",
                 "add_download",
                 "pause_download",
+                "set_speed_limit",
                 "resume_download",
                 "cancel_download",
                 "remove_download",

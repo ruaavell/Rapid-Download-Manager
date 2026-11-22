@@ -20,6 +20,13 @@ struct PendingDownload {
     content_type: Option<String>,
 }
 
+#[derive(Serialize)]
+struct TaskView {
+    #[serde(flatten)]
+    task: DownloadTask,
+    segments: Vec<rdm_core::SegmentProgress>,
+}
+
 #[derive(Serialize, Clone)]
 struct PendingPayload {
     id: String,
@@ -270,8 +277,14 @@ async fn dismiss_pending_download(id: String, state: State<'_, AppState>) -> Res
 }
 
 #[tauri::command]
-async fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>, String> {
-    Ok(state.manager.list().await)
+async fn list_downloads(state: State<'_, AppState>) -> Result<Vec<TaskView>, String> {
+    let tasks = state.manager.list().await;
+    let mut views = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let segments = state.manager.segment_progress(&task.id).await;
+        views.push(TaskView { task, segments });
+    }
+    Ok(views)
 }
 
 #[tauri::command]
@@ -299,6 +312,19 @@ async fn add_download(payload: AddPayload, state: State<'_, AppState>) -> Result
 #[tauri::command]
 async fn pause_download(id: String, state: State<'_, AppState>) -> Result<(), String> {
     state.manager.pause(&id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_speed_limit(
+    id: String,
+    speed_limit: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .manager
+        .set_speed_limit(&id, speed_limit)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -640,6 +666,7 @@ fn main() {
             dismiss_pending_download,
             add_download,
             pause_download,
+            set_speed_limit,
             resume_download,
             cancel_download,
             remove_download

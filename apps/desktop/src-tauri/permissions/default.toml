@@ -12,6 +12,7 @@ permissions = [
   "allow-list-downloads",
   "allow-add-download",
   "allow-pause-download",
+  "allow-set-speed-limit",
   "allow-resume-download",
   "allow-cancel-download",
   "allow-remove-download"

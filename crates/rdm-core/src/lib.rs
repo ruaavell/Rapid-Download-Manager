@@ -46,6 +46,17 @@ pub struct DownloadTask {
     pub created_at: i64,
 }
 
+/// Live progress of one byte range of a segmented download.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SegmentProgress {
+    pub index: usize,
+    pub start: u64,
+    pub end: u64,
+    pub downloaded: u64,
+    pub total: u64,
+    pub complete: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewDownload {
     pub url: String,
@@ -58,6 +69,60 @@ pub struct NewDownload {
     /// `Cookie` header value from the browser. Kept in memory only.
     #[serde(default)]
     pub cookies: Option<String>,
+}
+
+/// Shared token bucket so every connection of a task respects one limit.
+struct RateGate {
+    limit: std::sync::atomic::AtomicU64,
+    state: std::sync::Mutex<(f64, std::time::Instant)>,
+}
+
+impl RateGate {
+    fn new(limit: u64) -> Self {
+        Self {
+            limit: std::sync::atomic::AtomicU64::new(limit),
+            state: std::sync::Mutex::new((0.0, std::time::Instant::now())),
+        }
+    }
+
+    fn set_limit(&self, limit: u64) {
+        self.limit
+            .store(limit, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    async fn acquire(&self, bytes: usize) {
+        loop {
+            let limit = self.limit.load(std::sync::atomic::Ordering::Relaxed);
+            if limit == 0 {
+                return;
+            }
+            let wait = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let now = std::time::Instant::now();
+                let elapsed = now.duration_since(state.1).as_secs_f64();
+                state.1 = now;
+                // Allow a short burst so small chunks still flow smoothly.
+                let capacity = limit as f64 * 0.25;
+                state.0 = (state.0 + elapsed * limit as f64).min(capacity);
+                let needed = bytes as f64;
+                if state.0 >= needed {
+                    state.0 -= needed;
+                    0.0
+                } else {
+                    let missing = needed - state.0;
+                    state.0 = 0.0;
+                    missing / limit as f64
+                }
+            };
+            if wait <= 0.0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs_f64(wait.min(0.5))).await;
+        }
+    }
 }
 
 /// Per-task request data that must never be written to disk.
@@ -107,6 +172,7 @@ pub struct DownloadManager {
     tasks: Arc<RwLock<HashMap<String, DownloadTask>>>,
     controls: Arc<Mutex<HashMap<String, watch::Sender<Control>>>>,
     extras: Arc<RwLock<HashMap<String, RequestExtras>>>,
+    gates: Arc<Mutex<HashMap<String, Arc<RateGate>>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +204,7 @@ impl DownloadManager {
             tasks: Arc::new(RwLock::new(tasks)),
             controls: Arc::new(Mutex::new(HashMap::new())),
             extras: Arc::new(RwLock::new(HashMap::new())),
+            gates: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -145,6 +212,78 @@ impl DownloadManager {
         let mut items: Vec<_> = self.tasks.read().await.values().cloned().collect();
         items.sort_by_key(|t| -t.created_at);
         items
+    }
+
+    /// Change the limit of a running task immediately. `None` or zero removes it.
+    pub async fn set_speed_limit(&self, id: &str, limit: Option<u64>) -> Result<()> {
+        let limit = limit.filter(|value| *value > 0);
+        self.update(id, |task| task.speed_limit = limit).await?;
+        if let Some(gate) = self.gates.lock().await.get(id) {
+            gate.set_limit(limit.unwrap_or(0));
+        }
+        Ok(())
+    }
+
+    /// Byte-range progress for a segmented task, read from its `.segN` files.
+    /// Returns an empty list for single-stream or finished tasks.
+    pub async fn segment_progress(&self, id: &str) -> Vec<SegmentProgress> {
+        let Ok(task) = self.get(id).await else {
+            return Vec::new();
+        };
+        let Some(total) = task.total else {
+            return Vec::new();
+        };
+        let segments = segment_count(total);
+        if segments < 2 {
+            return Vec::new();
+        }
+        let part = part_path(Path::new(&task.destination));
+        if fs::metadata(seg_path(&part, 0)).await.is_err() {
+            return Vec::new();
+        }
+        let base = total / segments as u64;
+        let mut progress = Vec::with_capacity(segments);
+        for index in 0..segments {
+            let start = index as u64 * base;
+            let end = if index == segments - 1 {
+                total - 1
+            } else {
+                (index as u64 + 1) * base - 1
+            };
+            let len = end - start + 1;
+            let downloaded = fs::metadata(seg_path(&part, index))
+                .await
+                .map(|meta| meta.len().min(len))
+                .unwrap_or(0);
+            progress.push(SegmentProgress {
+                index,
+                start,
+                end,
+                downloaded,
+                total: len,
+                complete: downloaded >= len,
+            });
+        }
+        progress
+    }
+
+    async fn gate_for(&self, id: &str) -> Arc<RateGate> {
+        if let Some(gate) = self.gates.lock().await.get(id) {
+            return gate.clone();
+        }
+        let limit = self
+            .get(id)
+            .await
+            .ok()
+            .and_then(|task| task.speed_limit)
+            .unwrap_or(0);
+        let gate = Arc::new(RateGate::new(limit));
+        self.gates
+            .lock()
+            .await
+            .entry(id.to_string())
+            .or_insert_with(|| gate.clone())
+            .clone()
     }
 
     pub async fn add(&self, input: NewDownload) -> Result<DownloadTask> {
@@ -266,6 +405,7 @@ impl DownloadManager {
         self.store.delete(id)?;
         self.tasks.write().await.remove(id);
         self.extras.write().await.remove(id);
+        self.gates.lock().await.remove(id);
         Ok(())
     }
 
@@ -308,12 +448,7 @@ impl DownloadManager {
         let accept_ranges = probe.as_ref().map(|p| p.accept_ranges).unwrap_or(false);
 
         let segments = if accept_ranges {
-            let t = total.unwrap_or(0);
-            if t >= 2 * 1024 * 1024 {
-                ((t / (1024 * 1024)) as usize).clamp(2, 8)
-            } else {
-                1
-            }
+            segment_count(total.unwrap_or(0))
         } else {
             1
         };
@@ -519,6 +654,7 @@ impl DownloadManager {
             PathBuf::from(name)
         };
 
+        let gate = self.gate_for(id).await;
         let base = total / segments as u64;
         let mut ranges: Vec<(usize, u64, u64)> = Vec::new();
         for i in 0..segments {
@@ -574,6 +710,7 @@ impl DownloadManager {
             let resume_from = start + existing_sizes[i];
             let manager = self.clone();
             let downloaded = downloaded.clone();
+            let gate = gate.clone();
             let mut control_rx = control_seg.clone();
             let request_headers = request_headers.clone();
             let handle = tokio::spawn(async move {
@@ -635,6 +772,7 @@ impl DownloadManager {
                         item = stream.next() => {
                             match item {
                                 Some(Ok(chunk)) => {
+                                    gate.acquire(chunk.len()).await;
                                     file.write_all(&chunk).await?;
                                     downloaded.fetch_add(chunk.len() as u64, Ordering::Relaxed);
                                 }
@@ -1019,6 +1157,7 @@ impl DownloadManager {
 
     async fn run_single(&self, id: &str, mut control: watch::Receiver<Control>) -> Result<()> {
         let task = self.get(id).await?;
+        let gate = self.gate_for(id).await;
         let destination = PathBuf::from(&task.destination);
         let part = part_path(&destination);
         if let Some(parent) = destination.parent() {
@@ -1131,8 +1270,7 @@ impl DownloadManager {
 
         let mut stream = response.bytes_stream();
         let mut downloaded = if append { existing } else { 0 };
-        let mut speed_window_bytes = 0u64;
-        let mut speed_window_start = std::time::Instant::now();
+        let mut last_progress = std::time::Instant::now();
 
         loop {
             tokio::select! {
@@ -1162,25 +1300,12 @@ impl DownloadManager {
                 item = stream.next() => {
                     match item {
                         Some(Ok(chunk)) => {
-                            if let Some(limit) = task.speed_limit.filter(|v| *v > 0) {
-                                let expected = std::time::Duration::from_secs_f64(
-                                    chunk.len() as f64 / limit as f64
-                                );
-                                let elapsed = speed_window_start.elapsed();
-                                if expected > elapsed {
-                                    tokio::time::sleep(expected - elapsed).await;
-                                }
-                            }
+                            gate.acquire(chunk.len()).await;
                             file.write_all(&chunk).await?;
                             downloaded = downloaded.saturating_add(chunk.len() as u64);
-                            speed_window_bytes = speed_window_bytes.saturating_add(chunk.len() as u64);
-                            if speed_window_start.elapsed() >= std::time::Duration::from_millis(500) {
-                                let elapsed = speed_window_start.elapsed().as_secs_f64();
-                                let speed = (speed_window_bytes as f64 / elapsed) as u64;
+                            if last_progress.elapsed() >= std::time::Duration::from_millis(500) {
                                 self.update(id, |t| t.downloaded = downloaded).await?;
-                                speed_window_bytes = 0;
-                                speed_window_start = std::time::Instant::now();
-                                let _ = speed;
+                                last_progress = std::time::Instant::now();
                             }
                         }
                         Some(Err(err)) => return Err(err.into()),
@@ -1291,6 +1416,22 @@ fn part_path(destination: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+fn seg_path(part: &Path, index: usize) -> PathBuf {
+    let mut name = part.as_os_str().to_os_string();
+    name.push(format!(".seg{index}"));
+    PathBuf::from(name)
+}
+
+/// Same split rule as `run_download`; kept in one place so reported parts
+/// always match the ranges the engine actually uses.
+fn segment_count(total: u64) -> usize {
+    if total >= 2 * 1024 * 1024 {
+        ((total / (1024 * 1024)) as usize).clamp(2, 8)
+    } else {
+        1
+    }
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1301,6 +1442,15 @@ fn now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn segment_plan_is_stable() {
+        assert_eq!(segment_count(0), 1);
+        assert_eq!(segment_count(2 * 1024 * 1024 - 1), 1);
+        assert_eq!(segment_count(2 * 1024 * 1024), 2);
+        assert_eq!(segment_count(5 * 1024 * 1024), 5);
+        assert_eq!(segment_count(64 * 1024 * 1024), 8);
+    }
 
     #[test]
     fn rejects_non_http_protocols() {
