@@ -28,6 +28,18 @@ function resolvePageUrl(videoOrPlayer) {
   return pageUrl;
 }
 
+function latestMediaUrl() {
+  try {
+    const entries = performance.getEntriesByType("resource");
+    const mediaExt = /\.(mp4|webm|m3u8|mpd|mp3|m4a|mov)(\?|#|$)/i;
+    const candidates = entries.filter((e) => mediaExt.test(e.name));
+    if (candidates.length) return candidates[candidates.length - 1].name;
+    const cdn = entries.filter((e) => /twimg\.com|v\.redd\.it|cdninstagram\.com|fbcdn\.net/i.test(e.name));
+    if (cdn.length) return cdn[cdn.length - 1].name;
+  } catch (e) {}
+  return null;
+}
+
 function resolveInstagramContainer(video) {
   let node = video;
   let fallback = video && video.parentElement ? video.parentElement : null;
@@ -72,7 +84,7 @@ function getPlayerSrc(player) {
   return "";
 }
 
-function attachRdmButton(target) {
+function attachRdmButton(target, containerOverride) {
   if (!target || target.dataset.rdmAttached === "1" || target.dataset.rdmHidden === "1") return;
   target.dataset.rdmAttached = "1";
 
@@ -80,7 +92,9 @@ function attachRdmButton(target) {
   const video = (target.tagName === "VIDEO") ? target : getPlayerVideo(target);
 
   let parent = null;
-  if (location.hostname.includes("instagram.com") && video) {
+  if (containerOverride) {
+    parent = containerOverride;
+  } else if (location.hostname.includes("instagram.com") && video) {
     parent = resolveInstagramContainer(video);
   } else if (isPlayer) {
     parent = target.parentElement;
@@ -126,6 +140,14 @@ function attachRdmButton(target) {
     let url = "";
     if (target.tagName === "VIDEO") url = target.currentSrc || target.src || "";
     else url = getPlayerSrc(target);
+    // Age-restricted / login-gated X videos often expose only a blob: src to
+    // the page. Recover the real media URL from the browser's resource timing
+    // entries so we can download it directly instead of asking yt-dlp to parse
+    // the tweet (which fails for NSFW tweets).
+    if (!url || url.startsWith("blob:")) {
+      const recovered = latestMediaUrl();
+      if (recovered) url = recovered;
+    }
     const targetUrl = (url && !url.startsWith("blob:")) ? url : pageUrl;
     const directFile = /\.(mp4|webm|mkv|mov|m4v|mp3|m4a|flac|wav|ogg)(\?|#|$)/i.test(targetUrl);
     try {
@@ -178,6 +200,17 @@ function deepQuerySelectorAll(selector, root) {
 }
 
 function scanVideos() {
+  if (location.hostname.includes("reddit.com")) {
+    deepQuerySelectorAll("shreddit-post").forEach((post) => {
+      const type = (post.getAttribute && (post.getAttribute("post-type") || "")) || "";
+      const hasPlayer = !!(post.querySelector && (post.querySelector("shreddit-player, shreddit-player-2, shreddit-player-static, shreddit-player-static-hlsjs, shreddit-async-loader, video") || (post.shadowRoot && post.shadowRoot.querySelector("video"))));
+      if (!/video/i.test(type) && !hasPlayer) return;
+      let container = null;
+      try { container = post.querySelector('[slot="post-media-container"]'); } catch (e) {}
+      attachRdmButton(post, container || post);
+    });
+    return;
+  }
   deepQuerySelectorAll("video").forEach(attachRdmButton);
   deepQuerySelectorAll("shreddit-player, shreddit-player-2, shreddit-player-static, shreddit-player-static-hlsjs").forEach(attachRdmButton);
 }

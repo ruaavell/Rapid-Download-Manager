@@ -1257,6 +1257,14 @@ impl DownloadManager {
                 "--user-agent".into(),
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36".into(),
             ]);
+            // X/Twitter's graphql endpoints are frequently blocked; the syndication
+            // API is more reliable for extracting tweet media.
+            if task.url.contains("x.com") || task.url.contains("twitter.com") {
+                args.extend([
+                    "--extractor-args".into(),
+                    "twitter:api=syndication".into(),
+                ]);
+            }
             // Forward the browser session so login-protected or referer-checked
             // media (Reddit, X, ...) can be extracted the same way the browser
             // would load it.
