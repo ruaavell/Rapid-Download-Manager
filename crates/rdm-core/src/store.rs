@@ -56,6 +56,7 @@ impl TaskStore {
              (id,url,filename,destination,downloaded,total,status,speed_limit,error,created_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
              ON CONFLICT(id) DO UPDATE SET
+               url=excluded.url,filename=excluded.filename,destination=excluded.destination,
                downloaded=excluded.downloaded,total=excluded.total,status=excluded.status,
                speed_limit=excluded.speed_limit,error=excluded.error",
             params![

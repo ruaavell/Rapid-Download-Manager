@@ -22,7 +22,21 @@ function openErrorPage() {
   chrome.tabs.create({ url: chrome.runtime.getURL("error.html") });
 }
 
-function sendToRdm(url, referrer) {
+// Cookie header for a URL, so servers that need the browser session (Google
+// Drive, login-protected sites) serve the real file instead of a web page.
+function getCookieHeader(url, cb) {
+  try {
+    chrome.cookies.getAll({ url }, (cookies) => {
+      if (chrome.runtime.lastError || !cookies || !cookies.length) return cb(null);
+      const header = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+      cb(header.length <= 60000 ? header : null);
+    });
+  } catch (e) {
+    cb(null);
+  }
+}
+
+function sendToRdm(url, referrer, filename) {
   isEnabled((enabled) => {
     if (!enabled) return;
     if (!url || !(url.startsWith("http://") || url.startsWith("https://"))) return;
@@ -33,7 +47,11 @@ function sendToRdm(url, referrer) {
         return;
       }
       setIcon(true);
-      chrome.runtime.sendNativeMessage(HOST, { action: "add", url, referrer: referrer || null }, (response) => {
+      getCookieHeader(url, (cookies) => {
+      const message = { action: "add", url, referrer: referrer || null };
+      if (filename) message.filename = filename;
+      if (cookies) message.cookies = cookies;
+      chrome.runtime.sendNativeMessage(HOST, message, (response) => {
         if (chrome.runtime.lastError || !response?.ok) {
           setIcon(false);
           openErrorPage();
@@ -45,6 +63,7 @@ function sendToRdm(url, referrer) {
             message: "Download sent to RDM."
           });
         }
+      });
       });
     });
   });
@@ -84,7 +103,16 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 });
 
-chrome.downloads.onCreated.addListener((downloadItem) => {
+function baseName(path) {
+  if (!path) return "";
+  const parts = String(path).split(/[\\/]/);
+  return parts[parts.length - 1] || "";
+}
+
+// Hand a browser-initiated download over to RDM. `filename` is the name the
+// browser worked out from Content-Disposition; the URL alone often says
+// nothing useful (e.g. Google Drive links end in "download").
+function captureBrowserDownload(downloadItem, filename) {
   isEnabled((enabled) => {
     if (!enabled) return;
     const url = downloadItem.finalUrl || downloadItem.url;
@@ -93,7 +121,18 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
       if (!ok) { setIcon(false); openErrorPage(); return; }
       try { chrome.downloads.cancel(downloadItem.id); } catch (e) {}
       try { chrome.downloads.erase({ id: downloadItem.id }); } catch (e) {}
-      sendToRdm(url, null);
+      sendToRdm(url, downloadItem.referrer || null, filename || null);
     });
   });
-});
+}
+
+if (chrome.downloads.onDeterminingFilename) {
+  // Chromium: the suggested name is final here, unlike in onCreated.
+  chrome.downloads.onDeterminingFilename.addListener((downloadItem) => {
+    captureBrowserDownload(downloadItem, baseName(downloadItem.filename));
+  });
+} else {
+  chrome.downloads.onCreated.addListener((downloadItem) => {
+    captureBrowserDownload(downloadItem, baseName(downloadItem.filename));
+  });
+}

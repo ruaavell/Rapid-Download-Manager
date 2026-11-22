@@ -53,12 +53,24 @@ export default function App() {
   const [globalSpeed, setGlobalSpeed] = useState(localStorage.getItem("rdm-global-speed") || "");
   const [appVersion, setAppVersion] = useState("");
   const [updateInfo, setUpdateInfo] = useState<{version: string; url: string} | null>(null);
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [pendingName, setPendingName] = useState("");
+  const [pendingDest, setPendingDest] = useState("");
+  const currentPending = pending[0];
 
   async function refresh() {
     try {
       setTasks(await invoke<Task[]>("list_downloads"));
     } catch (e) { setError(String(e)); }
+    // Links sent from the browser extension wait here until confirmed.
+    try {
+      setPending(await invoke<Pending[]>("list_pending_downloads"));
+    } catch { /* keep the previous list */ }
   }
+  useEffect(() => {
+    setPendingName(currentPending ? currentPending.filename : "");
+    setPendingDest("");
+  }, [currentPending?.id]);
   useEffect(() => {
     invoke<string>("default_download_dir").then(setDestination).catch(e => setError(String(e)));
     getVersion().then(setAppVersion).catch(() => setAppVersion("1.0.5"));
@@ -94,12 +106,33 @@ export default function App() {
       const effectiveSpeed = speedLimit || globalSpeed;
       await invoke("add_download", { payload: {
         url, destination: folderFor(url, filename, destination), filename: filename || null,
-        speedLimit: effectiveSpeed ? Number(effectiveSpeed) * 1024 : null
+        speed_limit: effectiveSpeed ? Number(effectiveSpeed) * 1024 : null
       }});
       setUrl(""); setFilename(""); setSpeedLimit(""); setModal(false);
       await refresh();
     } catch (e) { setError(String(e)); }
     finally { setBusy(false); }
+  }
+
+  async function confirmPending() {
+    if (!currentPending) return;
+    setBusy(true); setError("");
+    try {
+      const name = pendingName.trim();
+      const dest = pendingDest.trim() || folderFor(currentPending.url, name || currentPending.filename, destination);
+      await invoke("confirm_pending_download", { payload: {
+        id: currentPending.id, destination: dest, filename: name || null,
+        speed_limit: globalSpeed ? Number(globalSpeed) * 1024 : null
+      }});
+      await refresh();
+    } catch (e) { setError(String(e)); }
+    finally { setBusy(false); }
+  }
+
+  async function dismissPending() {
+    if (!currentPending) return;
+    try { await invoke("dismiss_pending_download", { id: currentPending.id }); await refresh(); }
+    catch (e) { setError(String(e)); }
   }
 
   async function action(name: string, id: string, extra: object = {}) {
@@ -174,6 +207,16 @@ export default function App() {
         <label>Speed limit (KB/s, optional)<input type="number" min="1" value={speedLimit} onChange={e=>setSpeedLimit(e.target.value)} placeholder="Unlimited"/></label>
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={()=>setModal(false)}>Cancel</button><button className="add-button" disabled={busy}>{busy?"Adding…":<><ArrowDownToLine size={16}/> Start download</>}</button></div>
       </form>
+    </div>}
+
+    {currentPending && <div className="modal-backdrop">
+      <div className="modal">
+        <div className="modal-title"><div><h2>Download from browser</h2><p>{currentPending.size ? fmtBytes(currentPending.size) : "Size unknown"}{pending.length > 1 ? ` · ${pending.length - 1} more waiting` : ""}</p></div></div>
+        <label>URL<input readOnly value={currentPending.url}/></label>
+        <label>Filename<input value={pendingName} onChange={e=>setPendingName(e.target.value)}/></label>
+        <label>Save to<input value={pendingDest} placeholder={folderFor(currentPending.url, pendingName || currentPending.filename, destination)} onChange={e=>setPendingDest(e.target.value)}/><small>Leave empty to use the default folder for this file type.</small></label>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={dismissPending}>Dismiss</button><button type="button" className="add-button" disabled={busy} onClick={confirmPending}>{busy ? "Adding…" : <><ArrowDownToLine size={16}/> Download</>}</button></div>
+      </div>
     </div>}
 
     {settingsOpen && <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setSettingsOpen(false);}}>
